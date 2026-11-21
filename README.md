@@ -186,7 +186,7 @@ Once revoked, LockSight can be uninstalled normally like any standard app.
 LockSight is 100% free, ad-free, and open-source. If it helped you break free or reclaim your focus, you can support ongoing development:
 
 - **International Supporters (Card / PayPal):** [Support on Ko-fi](https://ko-fi.com/techieirfu)
-- **Indian Supporters (UPI — 0% Fee):** `your-upi-id@bank` *(or scan QR below)*
+- **Indian Supporters (UPI — 0% Fee):** `md-irfu@ptyes` *(or scan QR below)*
 
 ---
 
