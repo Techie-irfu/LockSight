@@ -12,10 +12,11 @@ A free, open-source Android content shield built for people who are tired of byp
 ## Screenshots
 
 <p align="center">
-  <img src="screenshots/shield.jpg" width="24%" alt="Shield Dashboard" />
-  <img src="screenshots/zen.jpg" width="24%" alt="Zen & Streak" />
-  <img src="screenshots/reminders.jpg" width="24%" alt="Daily Reminders" />
-  <img src="screenshots/features.jpg" width="24%" alt="Features & Tiles" />
+  <img src="screenshots/shield.jpg" width="19%" alt="Shield Dashboard" />
+  <img src="screenshots/zen.jpg" width="19%" alt="Zen & Streak" />
+  <img src="screenshots/reminders.jpg" width="19%" alt="Daily Reminders" />
+  <img src="screenshots/features.jpg" width="19%" alt="Features & Tiles" />
+  <img src="screenshots/faith.jpg" width="19%" alt="Faith Personalization" />
 </p>
 
 ---
