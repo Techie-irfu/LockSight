@@ -188,7 +188,8 @@ LockSight is 100% free, ad-free, and open-source. If it helped you break free or
 
 - **International Supporters (Card / PayPal):** [Support on Ko-fi](https://ko-fi.com/techieirfu)
 - **Indian Supporters (UPI — 0% Fee):** `md-irfu@ptyes` *(or scan QR below)*
-- <details>
+
+<details>
 <summary><strong>Click to reveal UPI QR Code (India — 0% Fee)</strong></summary>
 <br>
 <p align="center">
