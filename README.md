@@ -102,7 +102,7 @@ Granting Enterprise Device Owner requires temporarily removing accounts from you
 ### Step 4: Install & Activate LockSight
 
 #### Option A: Full One-Click Windows Installer ZIP — **HIGHLY RECOMMENDED**
-Download **`LockSight-v1.0.0-Full-Installer-Windows.zip`** from [Releases](https://github.com/Techie-irfu/LockSight/releases/latest), extract it, plug in your phone via USB, and double-click **`Setup-LockSight.bat`**.
+Download **`LockSight-vX.X.X-Full-Installer-Windows.zip`** from [Releases](https://github.com/Techie-irfu/LockSight/releases/latest), extract it, plug in your phone via USB, and double-click **`Setup-LockSight.bat`**.
 
 **Why Option A is strongly recommended over installing the raw APK:**
 1. **No need to pause Google Play Protect** during installation.
@@ -112,14 +112,14 @@ Download **`LockSight-v1.0.0-Full-Installer-Windows.zip`** from [Releases](https
 
 > **Watch your phone screen during `[2/5] Installing LockSight`:** On **OnePlus, Oppo, Realme, Vivo, iQOO, and Xiaomi**, a pop-up will appear on your phone asking to confirm the USB installation — tap **Continue / Install** so the script completes.
 
-#### Option B: Activator-Only ZIP (If You Already Installed `LockSight-v1.0.0-arm64-v8a.apk`)
-Download **`LockSight-v1.0.0-ADB-Activator-Only.zip`**, extract it, connect via USB, and double-click **`Activate-LockSight.bat`**.
+#### Option B: Activator-Only ZIP (If You Already Installed `LockSight-vX.X.X-arm64-v8a.apk`)
+Download **`LockSight-vX.X.X-ADB-Activator-Only.zip`**, extract it, connect via USB, and double-click **`Activate-LockSight.bat`**.
 *(Note: If you installed the raw APK on your phone, tap LockSight once in Accessibility while grayed out, then open **App Info -> `⋮` -> Allow restricted settings** to enable Accessibility.)*
 
 #### Option C: Manual ADB Commands (Mac / Linux / `platform-tools` Users)
 ```bash
 # 1. Install APK with Play Store installer flag (tap Continue/Install on phone if prompted)
-adb install -i com.android.vending -r LockSight-v1.0.0-arm64-v8a.apk
+adb install -i com.android.vending -r LockSight-vX.X.X-arm64-v8a.apk
 
 # 2. Grant Enterprise Device Owner
 adb shell dpm set-device-owner com.locksight.guard/.AdminReceiver
@@ -170,8 +170,9 @@ Strict Indian UPI and banking apps monitor Accessibility Services for anti-fraud
 
 ## Updating & Uninstalling (Undo ADB Commands)
 
-- **Updating on Phone:** Open **Menu -> About -> Check for App Updates**. Installing a newer signed APK preserves Device Owner, NextDNS, Accessibility, and your Phone Manager Allowlist automatically.
-- **Updating While Keeping Play Store Flag for Paytm (Recommended):** Download **`LockSight-Updater-Windows.zip`** + the latest `LockSight-vX.X.X-arm64-v8a.apk` into the same folder, unlock your 1-hour Daytime ADB window, and double-click **`Update-LockSight.bat`** (no account removal needed!).
+- **First-Time Users:** Always use **Option A (`LockSight-vX.X.X-Full-Installer-Windows.zip`)** for the smoothest setup and best UPI/Banking compatibility.
+- **Existing Users Updating to a New Version (Recommended — Keeps Paytm/UPI Working):** Download **`LockSight-vX.X.X-Updater-Windows.zip`** (the latest `vX.X.X` APK is already included inside!), extract it, unlock your 1-hour Daytime ADB window if ADB is locked, plug in via USB, and double-click **`Update-LockSight.bat`** (no account removal or Device Owner reset needed!).
+- **Quick On-Phone Update:** Open **Menu -> About -> Check for App Updates** to download the APK directly on your phone. All Device Owner policies, NextDNS settings, and OEM Allowlists remain preserved.
 - **Uninstalling / Revoking LockSight Later:** First unlock ADB inside LockSight using the 12h/24h Daylight timer, connect to a PC, and run:
 ```bash
 adb shell dpm remove-active-admin com.locksight.guard/.AdminReceiver
