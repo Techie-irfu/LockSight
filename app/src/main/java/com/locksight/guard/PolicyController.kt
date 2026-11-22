@@ -31,6 +31,8 @@ object PolicyController {
     private val safePayHandler = Handler(Looper.getMainLooper())
     private var safePayAutoRestoreRunnable: Runnable? = null
     @Volatile private var cachedBrowsers: Set<String>? = null
+    @Volatile private var cachedEligibleGames: List<Pair<String, String>>? = null
+    @Volatile private var cachedEligibleBanks: List<Pair<String, String>>? = null
 
     fun dpm(ctx: Context): DevicePolicyManager =
         ctx.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
@@ -655,10 +657,18 @@ object PolicyController {
         } catch (_: Exception) {}
     }
 
+    fun hasWriteSecureSettings(ctx: Context): Boolean =
+        ctx.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED
+
     fun scheduleSelfHealAccessibility(ctx: Context) {
         val appCtx = ctx.applicationContext
-        if (!isSystemSealed(appCtx)) return
+        if (!isSystemSealed(appCtx) && !hasWriteSecureSettings(appCtx)) return
         if (prefs(appCtx).getBoolean("safe_payment_mode_active", false)) return
+
+        // Fast in-process heal attempt at 1.5s
+        safePayHandler.postDelayed({ handleSelfHealAccessibility(appCtx) }, 1500L)
+
+        // OS AlarmManager backup at 3s (survives background kill by system/OEM!)
         try {
             val am = appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             val intent = Intent(appCtx, AdminReceiver::class.java).apply {
@@ -670,7 +680,7 @@ object PolicyController {
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
-            val triggerAt = System.currentTimeMillis() + 1500L
+            val triggerAt = System.currentTimeMillis() + 3000L
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pending)
             } else {
@@ -681,9 +691,11 @@ object PolicyController {
 
     fun handleSelfHealAccessibility(ctx: Context) {
         val appCtx = ctx.applicationContext
-        if (!isSystemSealed(appCtx)) return
+        if (!isSystemSealed(appCtx) && !hasWriteSecureSettings(appCtx)) return
         if (prefs(appCtx).getBoolean("safe_payment_mode_active", false)) return
-        tryAutoEnableAccessibility(appCtx)
+        if (!isAccessibilityServiceEnabled(appCtx)) {
+            tryAutoEnableAccessibility(appCtx)
+        }
     }
 
     fun tryAutoEnableAccessibility(ctx: Context): Boolean {
@@ -915,6 +927,69 @@ object PolicyController {
         }
     }
 
+    // --- 8B. OPTIONAL MULTI-USER, SYSTEM CLONER & PRIVATE SPACE LOCK ---
+    fun isMultiUserLocked(ctx: Context): Boolean {
+        if (!isDeviceOwner(ctx)) return false
+        return try {
+            val dpmFlag = dpm(ctx).getUserRestrictions(admin(ctx)).getBoolean(UserManager.DISALLOW_ADD_USER, false)
+            val um = ctx.getSystemService(Context.USER_SERVICE) as UserManager
+            dpmFlag || um.hasUserRestriction(UserManager.DISALLOW_ADD_USER)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun lockMultiUserAndClonerNow(ctx: Context): String {
+        if (!isDeviceOwner(ctx)) return "Requires Device Owner mode."
+        val dpm = dpm(ctx)
+        val admin = admin(ctx)
+        try { dpm.addUserRestriction(admin, UserManager.DISALLOW_ADD_USER) } catch (_: Exception) {}
+        try { dpm.addUserRestriction(admin, UserManager.DISALLOW_ADD_MANAGED_PROFILE) } catch (_: Exception) {}
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            try { dpm.addUserRestriction(admin, "no_add_clone_profile") } catch (_: Exception) {}
+        }
+        if (Build.VERSION.SDK_INT >= 35) {
+            try { dpm.addUserRestriction(admin, "no_add_private_profile") } catch (_: Exception) {}
+        }
+        prefs(ctx).edit().putLong("multi_user_ready_at", 0L).commit()
+        return "Multi-User, Guest Mode, System Cloner & Private Space are now LOCKED."
+    }
+
+    fun startMultiUserUnlockCountdown(ctx: Context, hours: Int, onUpdate: () -> Unit) {
+        val readyAt = System.currentTimeMillis() + (hours * 3600 * 1000L)
+        prefs(ctx).edit().putLong("multi_user_ready_at", readyAt).commit()
+        Handler(Looper.getMainLooper()).postDelayed({
+            sendTimerNotification(
+                ctx,
+                "Multi-User / Cloner Unlock Ready",
+                "Your $hours-hour countdown finished. Activate during Daylight (7 AM – 6 PM).",
+                1013
+            )
+            onUpdate()
+        }, hours * 3600 * 1000L + 1000L)
+        onUpdate()
+    }
+
+    fun unlockMultiUserNow(ctx: Context): String {
+        if (!isDeviceOwner(ctx)) return "Requires Device Owner mode."
+        val readyAt = prefs(ctx).getLong("multi_user_ready_at", 0L)
+        if (readyAt == 0L || System.currentTimeMillis() < readyAt) return "Countdown not finished yet."
+        if (!isDaylightWindow()) return "Blocked: Can only be unlocked in Daylight (7:00 AM – 6:00 PM)."
+
+        val dpm = dpm(ctx)
+        val admin = admin(ctx)
+        try { dpm.clearUserRestriction(admin, UserManager.DISALLOW_ADD_USER) } catch (_: Exception) {}
+        try { dpm.clearUserRestriction(admin, UserManager.DISALLOW_ADD_MANAGED_PROFILE) } catch (_: Exception) {}
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            try { dpm.clearUserRestriction(admin, "no_add_clone_profile") } catch (_: Exception) {}
+        }
+        if (Build.VERSION.SDK_INT >= 35) {
+            try { dpm.clearUserRestriction(admin, "no_add_private_profile") } catch (_: Exception) {}
+        }
+        prefs(ctx).edit().putLong("multi_user_ready_at", 0L).commit()
+        return "Multi-User, System Cloner & Private Space Unlocked."
+    }
+
     // --- 9. SAFE ACCESSIBILITY PERMIT ---
     fun enforceAccessibilityService(ctx: Context) {
         if (!isDeviceOwner(ctx)) return
@@ -992,6 +1067,42 @@ object PolicyController {
         )
         val lower = pkg.lowercase()
         return forbiddenKeywords.any { lower.contains(it) }
+    }
+
+    fun prewarmExcludedAppCachesAsync(ctx: Context) {
+        val appCtx = ctx.applicationContext
+        Thread {
+            try {
+                refreshCachedBrowsers(appCtx)
+                cachedEligibleGames = getEligibleGameApps(appCtx)
+                cachedEligibleBanks = getEligibleBankingApps(appCtx)
+            } catch (_: Exception) {}
+        }.start()
+    }
+
+    fun getEligibleAppsFastAsync(
+        ctx: Context,
+        isGames: Boolean,
+        onReady: (List<Pair<String, String>>) -> Unit
+    ) {
+        val cached = if (isGames) cachedEligibleGames else cachedEligibleBanks
+        if (cached != null) {
+            onReady(cached)
+            // Refresh silently in background for next tap
+            Thread {
+                if (isGames) cachedEligibleGames = getEligibleGameApps(ctx.applicationContext)
+                else cachedEligibleBanks = getEligibleBankingApps(ctx.applicationContext)
+            }.start()
+            return
+        }
+        Thread {
+            val fresh = if (isGames) {
+                getEligibleGameApps(ctx.applicationContext).also { cachedEligibleGames = it }
+            } else {
+                getEligibleBankingApps(ctx.applicationContext).also { cachedEligibleBanks = it }
+            }
+            Handler(Looper.getMainLooper()).post { onReady(fresh) }
+        }.start()
     }
 
     fun getEligibleGameApps(ctx: Context): List<Pair<String, String>> {

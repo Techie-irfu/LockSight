@@ -231,6 +231,7 @@ class MainActivity : AppCompatActivity() {
         PolicyController.revertToMainDnsIfExpired(this)
         PolicyController.checkAndRelockFullVpn(this)
         PolicyController.checkAndRelockAdb(this)
+        PolicyController.prewarmExcludedAppCachesAsync(this)
 
         val prefs = PolicyController.prefs(this)
         if (prefs.getLong("clean_streak_start", 0L) == 0L) {
@@ -323,6 +324,7 @@ class MainActivity : AppCompatActivity() {
         PolicyController.syncSealStateWithDeviceOwner(this)
         PolicyController.revertToMainDnsIfExpired(this)
         PolicyController.checkAndRestoreSafePayIfExpired(this)
+        PolicyController.handleSelfHealAccessibility(this)
         renderScreen()
         liveTickerHandler.postDelayed(liveTickerRunnable, 15000L)
         safePayTickerHandler.removeCallbacks(safePayTickerRunnable)
@@ -1179,6 +1181,44 @@ class MainActivity : AppCompatActivity() {
             })
         })
 
+        // --- CARD 6B: OPTIONAL MULTI-USER, SYSTEM CLONER & PRIVATE SPACE LOCK ---
+        rootLayout.addView(makeCard().apply {
+            val isMultiLocked = PolicyController.isMultiUserLocked(this@MainActivity)
+            val readyAt = prefs.getLong("multi_user_ready_at", 0L)
+            val now = System.currentTimeMillis()
+            val isReady = readyAt in 1..now
+
+            val status = when {
+                !isMultiLocked -> "OPTIONAL • Currently Unlocked (Work/Clone Profiles Allowed)"
+                readyAt > now -> "Unlock Countdown: ${(readyAt - now) / 3600000L}h ${((readyAt - now) % 3600000L) / 60000L}m left"
+                isReady -> "Ready to Unlock (Daylight 7 AM – 6 PM)"
+                else -> "LOCKED (Multiple Users, System Cloner & Private Space Blocked)"
+            }
+            addView(makeCardHeader("👥", "#EC4899", "Multi-User & System Cloner Vault (Optional)", status))
+            addView(makeBody("Closes the secondary-space loophole by blocking new Multiple Users, Guest Mode, System Cloner, App Clones, and Android Private Space. Leave unlocked if you genuinely need a Work Profile."))
+
+            addView(makeButton(
+                if (isMultiLocked) "✓ Multi-User, System Cloner & Private Space Locked" else "Lock Multi-User, System Cloner & Private Space",
+                "#EC4899",
+                !isMultiLocked
+            ) {
+                toast(PolicyController.lockMultiUserAndClonerNow(this@MainActivity))
+                renderScreen()
+            })
+            if (isMultiLocked) {
+                addView(makeButton("Start 12-Hour Unlock Countdown", "#334155", readyAt <= now) {
+                    PolicyController.startMultiUserUnlockCountdown(this@MainActivity, 12) { renderScreen() }
+                    toast("12-Hour Multi-User unlock countdown started.")
+                })
+                if (isReady) {
+                    addView(makeButton("Unlock Multi-User & System Cloner (7 AM – 6 PM)", "#10B981", true) {
+                        toast(PolicyController.unlockMultiUserNow(this@MainActivity))
+                        renderScreen()
+                    })
+                }
+            }
+        })
+
         // --- CARD 7: SEPARATE ADB & DEVELOPER OPTIONS LOCK ---
         rootLayout.addView(makeCard().apply {
             val readyAt = prefs.getLong("adb_ready_at", 0L)
@@ -1331,13 +1371,13 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             setBackgroundColor(Color.parseColor("#070B12"))
-            setPadding(dp(20), dp(36), dp(20), dp(32))
+            setPadding(dp(18), dp(28), dp(18), dp(28))
         }
         scroll.addView(root)
 
         root.addView(TextView(this).apply {
             text = "ZEN SANCTUARY LOCK ACTIVE"
-            textSize = 13f
+            textSize = 12.5f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor("#10B981"))
             letterSpacing = 0.14f
@@ -1345,39 +1385,39 @@ class MainActivity : AppCompatActivity() {
 
         val timerText = TextView(this).apply {
             text = String.format("%02d:00", minutes)
-            textSize = 52f
+            textSize = 46f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.WHITE)
-            setPadding(0, dp(8), 0, dp(6))
+            setPadding(0, dp(4), 0, dp(4))
         }
         root.addView(timerText)
 
         val breathBox = TextView(this).apply {
-            text = "INHALE DEEPLY (4s)..."
-            textSize = 15.5f
+            text = "🌬️ INHALE DEEPLY (4s)..."
+            textSize = 14f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor("#38BDF8"))
             gravity = Gravity.CENTER
-            background = roundedBg("#0F1A2C", 14f)
-            setPadding(dp(16), dp(16), dp(16), dp(16))
+            background = roundedBg("#0F1A2C", 12f)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(12) }
+            ).apply { bottomMargin = dp(10) }
         }
         root.addView(breathBox)
 
         val quoteView = TextView(this).apply {
             text = "${faithQuotes[currentQuoteIdx].quote}\n— ${faithQuotes[currentQuoteIdx].source}"
-            textSize = 13.5f
+            textSize = 12.5f
             gravity = Gravity.CENTER
             setTextColor(Color.parseColor("#CBD5E1"))
-            background = roundedBg("#0F292E", 14f)
-            setPadding(dp(16), dp(14), dp(16), dp(14))
+            background = roundedBg("#0F292E", 12f)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(12) }
+            ).apply { bottomMargin = dp(10) }
             setOnClickListener {
                 currentQuoteIdx = (currentQuoteIdx + 1) % faithQuotes.size
                 text = "${faithQuotes[currentQuoteIdx].quote}\n— ${faithQuotes[currentQuoteIdx].source}"
@@ -1385,81 +1425,233 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(quoteView)
 
+        // =====================================================================
+        // 2-IN-1 ZEN FOCUS ARCADE: NEON BRICK BREAKER + NEURAL PULSE MEMORY
+        // =====================================================================
         val gameCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = roundedBg("#111827", 15f)
-            setPadding(dp(14), dp(14), dp(14), dp(14))
+            background = roundedBgWithBorder("#0F172A", "#1E3A8A", 16f, dp(1))
+            setPadding(dp(12), dp(12), dp(12), dp(12))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { bottomMargin = dp(12) }
         }
-        var score = 0
-        var targetNumber = Random.nextInt(1, 10)
-        val gameHeader = TextView(this).apply {
-            text = "⚡ URGE-KILLER FOCUS GAME • SCORE: 0\nTap the matching number node: [ $targetNumber ]"
-            textSize = 13.5f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#F59E0B"))
-            gravity = Gravity.CENTER
-            setPadding(0, 0, 0, dp(10))
-        }
-        gameCard.addView(gameHeader)
 
-        val grid = GridLayout(this).apply {
-            columnCount = 3
-            rowCount = 3
+        val modeSwitchRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = roundedBg("#070B12", 11f)
+            setPadding(dp(4), dp(4), dp(4), dp(4))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(10) }
+        }
+
+        var activeGameMode = 0 // 0 = Neon Brick Breaker, 1 = Neural Pulse Memory
+        val arcadeContainer = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(300)
             )
         }
 
-        fun rebuildGameGrid() {
-            grid.removeAllViews()
-            val nums = (1..9).shuffled()
-            for (n in nums) {
-                val cell = Button(this).apply {
-                    text = "$n"
-                    textSize = 16f
-                    setTypeface(null, Typeface.BOLD)
-                    setTextColor(Color.WHITE)
-                    background = roundedBg(if (n == targetNumber) "#1E3A8A" else "#1E293B", 10f)
+        var brickGameView: NeonBrickBreakerView? = null
+        val memoryHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+        fun mountBrickBreaker() {
+            memoryHandler.removeCallbacksAndMessages(null)
+            arcadeContainer.removeAllViews()
+            val v = NeonBrickBreakerView(this)
+            brickGameView = v
+            arcadeContainer.addView(
+                v,
+                FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+            )
+        }
+
+        fun mountNeuralPulseMemory() {
+            brickGameView?.stopLoop()
+            brickGameView = null
+            arcadeContainer.removeAllViews()
+
+            val memWrap = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_HORIZONTAL
+                layoutParams = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                )
+            }
+
+            var bestMem = prefs.getInt("zen_mem_best", 0)
+            var memLevel = 1
+            val sequence = mutableListOf<Int>()
+            var playerStep = 0
+            var acceptingInput = false
+
+            val statusTv = TextView(this).apply {
+                text = "🧠 NEURAL PULSE • LEVEL 1  |  BEST: $bestMem\nWatch the glowing sequence, then repeat it!"
+                textSize = 12.5f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor("#38BDF8"))
+                gravity = Gravity.CENTER
+                setPadding(0, 0, 0, dp(10))
+            }
+            memWrap.addView(statusTv)
+
+            val padButtons = ArrayList<Button>(9)
+            val padGrid = GridLayout(this).apply {
+                columnCount = 3
+                rowCount = 3
+                layoutParams = LinearLayout.LayoutParams(dp(230), dp(230))
+            }
+
+            fun playSequence() {
+                acceptingInput = false
+                playerStep = 0
+                statusTv.text = "👀 WATCH CAREFULLY... (Level $memLevel • ${sequence.size} steps)"
+                padButtons.forEach { it.background = roundedBg("#1E293B", 12f) }
+
+                sequence.forEachIndexed { idx, tileIdx ->
+                    val startMs = 450L + idx * 540L
+                    memoryHandler.postDelayed({
+                        padButtons[tileIdx].background = roundedBg("#38BDF8", 12f)
+                    }, startMs)
+                    memoryHandler.postDelayed({
+                        padButtons[tileIdx].background = roundedBg("#1E293B", 12f)
+                    }, startMs + 340L)
+                }
+
+                val unlockMs = 450L + sequence.size * 540L
+                memoryHandler.postDelayed({
+                    acceptingInput = true
+                    statusTv.text = "🎯 YOUR TURN! Repeat all ${sequence.size} pulses (Best: $bestMem)"
+                }, unlockMs)
+            }
+
+            fun startNextRound(reset: Boolean) {
+                if (reset) {
+                    memLevel = 1
+                    sequence.clear()
+                    sequence.add(Random.nextInt(9))
+                    sequence.add(Random.nextInt(9))
+                    sequence.add(Random.nextInt(9))
+                } else {
+                    memLevel++
+                    sequence.add(Random.nextInt(9))
+                }
+                playSequence()
+            }
+
+            for (i in 0 until 9) {
+                val tileBtn = Button(this).apply {
+                    text = ""
+                    background = roundedBg("#1E293B", 12f)
                     layoutParams = GridLayout.LayoutParams().apply {
                         width = 0
-                        height = dp(48)
+                        height = 0
                         columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
-                        setMargins(dp(4), dp(4), dp(4), dp(4))
+                        rowSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
+                        setMargins(dp(5), dp(5), dp(5), dp(5))
                     }
                     setOnClickListener {
-                        if (n == targetNumber) {
-                            score += 10
-                            targetNumber = Random.nextInt(1, 10)
-                            gameHeader.text = "⚡ URGE-KILLER FOCUS GAME • SCORE: $score\nTap the matching number node: [ $targetNumber ]"
-                            rebuildGameGrid()
+                        if (!acceptingInput) return@setOnClickListener
+                        if (i == sequence[playerStep]) {
+                            background = roundedBg("#10B981", 12f)
+                            memoryHandler.postDelayed({ background = roundedBg("#1E293B", 12f) }, 180L)
+                            playerStep++
+                            if (playerStep == sequence.size) {
+                                acceptingInput = false
+                                if (memLevel > bestMem) {
+                                    bestMem = memLevel
+                                    prefs.edit().putInt("zen_mem_best", bestMem).apply()
+                                }
+                                statusTv.text = "✅ PERFECT! Advancing to Level ${memLevel + 1}..."
+                                memoryHandler.postDelayed({ startNextRound(false) }, 750L)
+                            }
+                        } else {
+                            acceptingInput = false
+                            background = roundedBg("#EF4444", 12f)
+                            statusTv.text = "❌ MISSED! Resetting to Level 1 (Best: $bestMem)..."
+                            memoryHandler.postDelayed({ startNextRound(true) }, 1000L)
                         }
                     }
                 }
-                grid.addView(cell)
+                padButtons.add(tileBtn)
+                padGrid.addView(tileBtn)
+            }
+
+            memWrap.addView(padGrid)
+            arcadeContainer.addView(memWrap)
+            startNextRound(true)
+        }
+
+        val tabBrick = TextView(this).apply {
+            text = "🧱 Neon Breaker"
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            background = roundedBg("#2563EB", 9f)
+            setPadding(0, dp(8), 0, dp(8))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val tabMem = TextView(this).apply {
+            text = "🧠 Memory Pulse"
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#94A3B8"))
+            setPadding(0, dp(8), 0, dp(8))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+
+        tabBrick.setOnClickListener {
+            if (activeGameMode != 0) {
+                activeGameMode = 0
+                tabBrick.background = roundedBg("#2563EB", 9f)
+                tabBrick.setTextColor(Color.WHITE)
+                tabMem.background = null
+                tabMem.setTextColor(Color.parseColor("#94A3B8"))
+                mountBrickBreaker()
             }
         }
-        rebuildGameGrid()
-        gameCard.addView(grid)
+        tabMem.setOnClickListener {
+            if (activeGameMode != 1) {
+                activeGameMode = 1
+                tabMem.background = roundedBg("#2563EB", 9f)
+                tabMem.setTextColor(Color.WHITE)
+                tabBrick.background = null
+                tabBrick.setTextColor(Color.parseColor("#94A3B8"))
+                mountNeuralPulseMemory()
+            }
+        }
+
+        modeSwitchRow.addView(tabBrick)
+        modeSwitchRow.addView(tabMem)
+        gameCard.addView(modeSwitchRow)
+        gameCard.addView(arcadeContainer)
         root.addView(gameCard)
 
+        mountBrickBreaker()
+
+        // =====================================================================
+        // REAL NATURE SOUNDSCAPES (Loads res/raw/zen_*.ogg with fallback!)
+        // =====================================================================
         val soundLabels = listOf(
-            "🎵 Soundscape: Forest Wind Chimes (Tap to Switch)",
-            "🌊 Soundscape: Gentle Ocean Swells (Tap to Switch)",
-            "🧘 Soundscape: 432Hz Deep Sanctuary Pad (Tap to Switch)",
-            "🔇 Soundscape: Muted (Tap to Unmute)"
+            "🐦 Nature Audio: Forest Birds (Tap to Switch)",
+            "🌧️ Nature Audio: Gentle Rain (Tap to Switch)",
+            "🌊 Nature Audio: Ocean Waves (Tap to Switch)",
+            "🍃 Nature Audio: Mountain Wind (Tap to Switch)",
+            "🔇 Nature Audio: Muted (Tap to Unmute)"
         )
         startZenMelodicAudio()
-        val soundBtn = makeButton(soundLabels[selectedSoundscapeMode], "#0284C7", true) {}
+        val soundBtn = makeButton(soundLabels[selectedSoundscapeMode.coerceIn(0, 4)], "#0284C7", true) {}
         soundBtn.setOnClickListener {
-            selectedSoundscapeMode = (selectedSoundscapeMode + 1) % 4
-            if (selectedSoundscapeMode == 3) {
-                stopZenMelodicAudio()
-            } else if (!isZenAudioPlaying) {
+            selectedSoundscapeMode = (selectedSoundscapeMode + 1) % 5
+            stopZenMelodicAudio()
+            if (selectedSoundscapeMode != 4) {
                 startZenMelodicAudio()
             }
             soundBtn.text = soundLabels[selectedSoundscapeMode]
@@ -1493,6 +1685,8 @@ class MainActivity : AppCompatActivity() {
 
             override fun onFinish() {
                 zenTimer = null
+                brickGameView?.stopLoop()
+                memoryHandler.removeCallbacksAndMessages(null)
                 stopZenMelodicAudio()
                 try {
                     stopLockTask()
@@ -1503,9 +1697,177 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    private inner class NeonBrickBreakerView(context: Context) : View(context) {
+        private val bgPaint = Paint().apply { color = Color.parseColor("#070B12") }
+        private val paddlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#38BDF8") }
+        private val ballPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+        private val hudPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#E2E8F0")
+            textSize = dpF(12.5f)
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        private val brickPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val rowColors = intArrayOf(
+            Color.parseColor("#F43F5E"),
+            Color.parseColor("#F59E0B"),
+            Color.parseColor("#10B981"),
+            Color.parseColor("#38BDF8")
+        )
+
+        private var running = true
+        private var initialized = false
+        private var score = 0
+        private var bestScore = PolicyController.prefs(context).getInt("zen_brick_best", 0)
+        private var wave = 1
+        private var paddleX = 0f
+        private var paddleW = dpF(88f)
+        private val paddleH = dpF(11f)
+        private var ballX = 0f
+        private var ballY = 0f
+        private var vx = dpF(3.6f)
+        private var vy = -dpF(4.2f)
+        private val ballR = dpF(7f)
+
+        private val cols = 6
+        private val rows = 4
+        private val bricks = BooleanArray(rows * cols) { true }
+
+        private val frameRunnable = object : Runnable {
+            override fun run() {
+                if (!running) return
+                stepPhysics()
+                invalidate()
+                postDelayed(this, 16L)
+            }
+        }
+
+        init {
+            post(frameRunnable)
+        }
+
+        fun stopLoop() {
+            running = false
+            removeCallbacks(frameRunnable)
+        }
+
+        private fun resetBall() {
+            ballX = width * 0.5f
+            ballY = height * 0.66f
+            val speedBoost = 1f + (wave - 1) * 0.12f
+            vx = (if (Random.nextBoolean()) 1f else -1f) * dpF(3.5f) * speedBoost
+            vy = -dpF(4.1f) * speedBoost
+        }
+
+        private fun stepPhysics() {
+            if (width <= 0 || height <= 0) return
+            if (!initialized) {
+                initialized = true
+                paddleX = (width - paddleW) * 0.5f
+                resetBall()
+            }
+
+            ballX += vx
+            ballY += vy
+
+            // Wall bounces
+            if (ballX - ballR < 0f) { ballX = ballR; vx = abs(vx) }
+            if (ballX + ballR > width) { ballX = width - ballR; vx = -abs(vx) }
+            if (ballY - ballR < dpF(26f)) { ballY = dpF(26f) + ballR; vy = abs(vy) }
+
+            // Paddle bounce
+            val paddleY = height - dpF(22f)
+            if (vy > 0 && ballY + ballR >= paddleY && ballY - ballR <= paddleY + paddleH &&
+                ballX >= paddleX - ballR && ballX <= paddleX + paddleW + ballR
+            ) {
+                val hitRatio = ((ballX - (paddleX + paddleW * 0.5f)) / (paddleW * 0.5f)).coerceIn(-1f, 1f)
+                vx = hitRatio * dpF(5.5f)
+                vy = -abs(vy)
+                ballY = paddleY - ballR
+            }
+
+            // Brick collisions
+            val pad = dpF(5f)
+            val topStart = dpF(34f)
+            val brickW = (width - pad * (cols + 1)) / cols
+            val brickH = dpF(18f)
+            var remaining = 0
+            for (r in 0 until rows) {
+                for (c in 0 until cols) {
+                    val idx = r * cols + c
+                    if (!bricks[idx]) continue
+                    remaining++
+                    val bx = pad + c * (brickW + pad)
+                    val by = topStart + r * (brickH + pad)
+                    if (ballX + ballR >= bx && ballX - ballR <= bx + brickW &&
+                        ballY + ballR >= by && ballY - ballR <= by + brickH
+                    ) {
+                        bricks[idx] = false
+                        remaining--
+                        vy = -vy
+                        score += 10 * wave
+                        if (score > bestScore) {
+                            bestScore = score
+                            PolicyController.prefs(context).edit().putInt("zen_brick_best", bestScore).apply()
+                        }
+                    }
+                }
+            }
+
+            if (remaining == 0) {
+                wave++
+                bricks.fill(true)
+                resetBall()
+            }
+
+            // Missed ball -> gentle reset (keeps flow without punishing frustration!)
+            if (ballY - ballR > height) {
+                score = (score - 20).coerceAtLeast(0)
+                resetBall()
+            }
+        }
+
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            parent?.requestDisallowInterceptTouchEvent(true)
+            if (event.action == MotionEvent.ACTION_DOWN || event.action == MotionEvent.ACTION_MOVE) {
+                paddleX = (event.x - paddleW * 0.5f).coerceIn(0f, (width - paddleW).coerceAtLeast(0f))
+            }
+            return true
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            canvas.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), dpF(12f), dpF(12f), bgPaint)
+            canvas.drawText("WAVE $wave   •   SCORE: $score   •   BEST: $bestScore", dpF(10f), dpF(18f), hudPaint)
+
+            val pad = dpF(5f)
+            val topStart = dpF(34f)
+            val brickW = (width - pad * (cols + 1)) / cols
+            val brickH = dpF(18f)
+
+            for (r in 0 until rows) {
+                brickPaint.color = rowColors[r % rowColors.size]
+                for (c in 0 until cols) {
+                    if (!bricks[r * cols + c]) continue
+                    val bx = pad + c * (brickW + pad)
+                    val by = topStart + r * (brickH + pad)
+                    canvas.drawRoundRect(bx, by, bx + brickW, by + brickH, dpF(5f), dpF(5f), brickPaint)
+                }
+            }
+
+            val paddleY = height - dpF(22f)
+            canvas.drawRoundRect(paddleX, paddleY, paddleX + paddleW, paddleY + paddleH, dpF(6f), dpF(6f), paddlePaint)
+            canvas.drawCircle(ballX, ballY, ballR, ballPaint)
+        }
+    }
+
     private fun startZenMelodicAudio() {
         if (isZenAudioPlaying) return
-        val rawResId = resources.getIdentifier("zen_nature", "raw", packageName)
+
+        // Looks for real copyright-free audio files in app/src/main/res/raw/:
+        // zen_birds.ogg, zen_rain.ogg, zen_ocean.ogg, zen_wind.ogg
+        val rawNames = listOf("zen_birds", "zen_rain", "zen_ocean", "zen_wind")
+        val targetName = rawNames.getOrElse(selectedSoundscapeMode) { "zen_birds" }
+        val rawResId = resources.getIdentifier(targetName, "raw", packageName)
         if (rawResId != 0) {
             try {
                 rawMediaPlayer?.release()
@@ -1518,6 +1880,7 @@ class MainActivity : AppCompatActivity() {
             } catch (_: Exception) {}
         }
 
+        // Smooth built-in fallback synth if a raw file hasn't been added yet
         isZenAudioPlaying = true
         zenAudioThread = Thread {
             val sampleRate = 22050
@@ -1563,30 +1926,17 @@ class MainActivity : AppCompatActivity() {
                             chimeAgeSec = 0.0
                             activeChimeFreq = chimeNotes[Random.nextInt(chimeNotes.size)]
                         }
-
                         val chimeEnvelope = exp(-2.2 * chimeAgeSec)
                         val slowSwell = 0.5 + 0.5 * sin(phaseSwell)
-
                         val sampleVal = when (selectedSoundscapeMode) {
-                            0 -> {
-                                val bell = sin(phaseChime) * chimeEnvelope * 0.35
-                                val warmPad = (sin(phaseBase) * 0.16) + (sin(phaseFifth) * 0.10)
-                                bell + warmPad
-                            }
-                            1 -> {
-                                val chord = (sin(phaseBase) * 0.25) + (sin(phaseFifth) * 0.18) + (sin(phaseChime * 0.5) * 0.10)
-                                chord * (0.35 + 0.65 * slowSwell)
-                            }
-                            else -> {
-                                (sin(phaseBase) * 0.24) + (sin(phaseFifth) * 0.16)
-                            }
+                            0 -> (sin(phaseChime) * chimeEnvelope * 0.35) + (sin(phaseBase) * 0.16) + (sin(phaseFifth) * 0.10)
+                            1, 2 -> ((sin(phaseBase) * 0.25) + (sin(phaseFifth) * 0.18)) * (0.35 + 0.65 * slowSwell)
+                            else -> (sin(phaseBase) * 0.24) + (sin(phaseFifth) * 0.16)
                         }
-
                         phaseBase += (2.0 * Math.PI * 174.0) * dt
                         phaseFifth += (2.0 * Math.PI * 261.63) * dt
                         phaseChime += (2.0 * Math.PI * activeChimeFreq) * dt
                         phaseSwell += (2.0 * Math.PI * 0.16) * dt
-
                         samples[i] = (sampleVal.coerceIn(-0.85, 0.85) * 14000).toInt().toShort()
                     }
                     track.write(samples, 0, samples.size)
@@ -2095,12 +2445,15 @@ class MainActivity : AppCompatActivity() {
         val socName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) Build.SOC_MODEL else Build.HARDWARE
         val deviceName = "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${Build.MODEL}"
         val androidVer = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
+        val appVersionName = try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "1.1.0"
+        } catch (_: Exception) { "1.1.0" }
 
         rootLayout.addView(makeSectionLabel("Basic info"))
         rootLayout.addView(makeCard().apply {
             addView(makeAboutRow("App name", "LockSight"))
             addView(makeDivider())
-            addView(makeAboutRow("App version", "v1.0.0"))
+            addView(makeAboutRow("App version", "v$appVersionName"))
             addView(makeDivider())
             addView(makeAboutRow("Developer & Architect", "Mohammed Irfan (Techie-irfu)"))
             addView(makeDivider())
@@ -2158,7 +2511,7 @@ class MainActivity : AppCompatActivity() {
             addView(makeDivider())
             addView(makeActionRow("ℹ️", "Copy System & Diagnostic Info") {
                 val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                val info = "LockSight v1.0.0 | Architect: Mohammed Irfan (Techie-irfu) | Device: $deviceName | OS: $androidVer | SoC: $socName | RAM: $totalRamGb"
+                val info = "LockSight v\$appVersionName | Architect: Mohammed Irfan (Techie-irfu) | Device: $deviceName | OS: $androidVer | SoC: $socName | RAM: $totalRamGb"
                 clip.setPrimaryClip(ClipData.newPlainText("LockSight Info", info))
                 toast("Device & LockSight info copied to clipboard!")
             })
@@ -2259,35 +2612,32 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showSeparateExclusionDialog(isGames: Boolean) {
-        val eligible = if (isGames) {
-            PolicyController.getEligibleGameApps(this)
-        } else {
-            PolicyController.getEligibleBankingApps(this)
-        }
-
-        if (eligible.isEmpty()) {
-            toast(if (isGames) "No installed Games or Emulators detected." else "No installed Banking or KYC apps detected.")
-            return
-        }
-
-        val prefKey = if (isGames) "excluded_games" else "excluded_banks"
-        val prefs = PolicyController.prefs(this)
-        val currentExcluded = (prefs.getStringSet(prefKey, emptySet()) ?: emptySet()).toMutableSet()
-        val labels = eligible.map { it.first }.toTypedArray()
-        val checked = eligible.map { currentExcluded.contains(it.second) }.toBooleanArray()
-
-        AlertDialog.Builder(this)
-            .setTitle(if (isGames) "Exclude Safe Games & Emulators" else "Exclude Banking, KYC & Document Apps")
-            .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
-                val pkg = eligible[which].second
-                if (isChecked) currentExcluded.add(pkg) else currentExcluded.remove(pkg)
+        PolicyController.getEligibleAppsFastAsync(this, isGames) { eligible ->
+            if (isFinishing || isDestroyed) return@getEligibleAppsFastAsync
+            if (eligible.isEmpty()) {
+                toast(if (isGames) "No installed Games or Emulators detected." else "No installed Banking or KYC apps detected.")
+                return@getEligibleAppsFastAsync
             }
-            .setPositiveButton("Save") { _, _ ->
-                prefs.edit().putStringSet(prefKey, currentExcluded).commit()
-                renderScreen()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+
+            val prefKey = if (isGames) "excluded_games" else "excluded_banks"
+            val prefs = PolicyController.prefs(this)
+            val currentExcluded = (prefs.getStringSet(prefKey, emptySet()) ?: emptySet()).toMutableSet()
+            val labels = eligible.map { it.first }.toTypedArray()
+            val checked = eligible.map { currentExcluded.contains(it.second) }.toBooleanArray()
+
+            AlertDialog.Builder(this)
+                .setTitle(if (isGames) "Exclude Safe Games & Emulators" else "Exclude Banking, KYC & Document Apps")
+                .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                    val pkg = eligible[which].second
+                    if (isChecked) currentExcluded.add(pkg) else currentExcluded.remove(pkg)
+                }
+                .setPositiveButton("Save") { _, _ ->
+                    prefs.edit().putStringSet(prefKey, currentExcluded).commit()
+                    renderScreen()
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
     }
 
     @Suppress("DEPRECATION")

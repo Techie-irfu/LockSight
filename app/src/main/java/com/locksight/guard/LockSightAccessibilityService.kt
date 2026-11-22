@@ -135,22 +135,19 @@ class LockSightAccessibilityService : AccessibilityService() {
         val now = System.currentTimeMillis()
         lastUserActivityTime = now
 
-        // 0. TARGETED "REMOVE ACCESS" CLICK GUARD (Works on ALL brands/UIs without blocking Privacy Controls!)
-        // Allows users to freely browse Security & Privacy, More alerts, Privacy controls, and other apps.
-        // Fires ONLY when clicking "Remove access" inside LockSight's own card!
-        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED && isClickOnLockSightRemoveAccess(event)) {
-            performGlobalAction(GLOBAL_ACTION_BACK)
-            PolicyController.scheduleSelfHealAccessibility(this)
-            if (now - lastSettingsToastTime > 2000L) {
-                lastSettingsToastTime = now
-                showSingleToast("LockSight: Access is locked by System Administrator.")
-            }
-            return
-        }
-
-        // 1. UNIVERSAL CROSS-BRAND SETTINGS & PRIVACY CONTROLS SELF-GUARD (0ms delay!)
-        // Covers OnePlus (OxygenOS/ColorOS), iQOO/Vivo, Xiaomi, Samsung, Pixel & Android Privacy Controls!
+// 1. UNIVERSAL CROSS-BRAND SETTINGS, PRIVACY CONTROLS & OEM PHONE MANAGER GUARD (0ms delay!)
+        // Strictly runs ONLY inside Settings / Privacy / OEM Security packages -> NEVER touches Notes or Gemini!
         if (isSettingsOrPrivacyGuardPackage(pkg)) {
+            if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED && isClickOnLockSightRemoveAccess(event)) {
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                PolicyController.scheduleSelfHealAccessibility(this)
+                if (now - lastSettingsToastTime > 2000L) {
+                    lastSettingsToastTime = now
+                    showSingleToast("LockSight: Access is locked by System Administrator.")
+                }
+                return
+            }
+
             if (isLockSightTamperScreenActive(event)) {
                 if (now - lastSettingsBlockHitTime < 3000L) {
                     rapidSettingsTamperCount++
@@ -265,8 +262,11 @@ class LockSightAccessibilityService : AccessibilityService() {
                 lower.contains("safetycenter") ||
                 lower.contains("permissioncontroller") ||
                 lower.contains("securitycenter") ||
+                lower.contains("safecenter") ||
+                lower.contains("oneplus.security") ||
                 lower.contains("com.vivo.settings") ||
-                lower.contains("com.iqoo.secure")
+                lower.contains("com.iqoo.secure") ||
+                lower.contains("com.samsung.android.lool")
     }
 
     /**
@@ -320,6 +320,15 @@ class LockSightAccessibilityService : AccessibilityService() {
         )
         if (isMainListScreen) return false
 
+        // 1B. Sealed-Only Phone Manager Allowlist Guard (stops removing LockSight from Allowlist during an urge!)
+        if (PolicyController.isSystemSealed(this)) {
+            val isPhoneManagerAllowlist = containsText(
+                root,
+                listOf("allowlist", "suspicious activity by the following apps", "block suspicious app activities", "abnormal device control")
+            )
+            if (isPhoneManagerAllowlist) return true
+        }
+
         // 2. OnePlus / Oppo / Realme (OxygenOS/ColorOS) & iQOO / Vivo (Funtouch/OriginOS) detail screens:
         // Shows 'LockSight' toggle + 'Shortcut' + ('App info' OR 'About this function' OR 'Accessibility')
         val isOemDetailPage = containsText(root, listOf("shortcut")) &&
@@ -348,8 +357,8 @@ class LockSightAccessibilityService : AccessibilityService() {
     }
 
     private fun isClickOnLockSightRemoveAccess(event: AccessibilityEvent): Boolean {
-        val clickedText = ((event.text?.joinToString(" ") ?: "") + " " + (event.contentDescription ?: "")).lowercase()
-        if (!clickedText.contains("remove access")) return false
+        val clickedText = ((event.text?.joinToString(" ") ?: "") + " " + (event.contentDescription ?: "")).lowercase().trim()
+        if (clickedText.length > 35 || !clickedText.contains("remove access")) return false
 
         // Climb up ONLY inside the clicked alert card (stop before ScrollView/RecyclerView so other apps are never affected)
         var node = event.source?.parent
