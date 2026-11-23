@@ -7,3 +7,4 @@ local.properties
 /captures
 .externalNativeBuild
 .cxx
+locksight_errors.txt
