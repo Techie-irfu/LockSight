@@ -59,6 +59,7 @@ I spent over a year testing almost every blocker available on Android — Bulldo
 - **Zen Sanctuary Mode & Clean Streak:** Full-screen urge lockout with melodic wind chimes/ocean swells, 4-4-4 box breathing, and an interactive focus game.
 - **Multi-Faith Personalization:** Tailor daily reflections and accountability checklists to **Islamic**, **Hindu**, **Christian**, **Universal (Neuroscience/Stoicism)**, or **Minimal** mode.
 - **Zero-Backend In-App Updater:** Checks GitHub Releases directly from `Menu -> About`.
+- **Optional Multi-User & System Cloner Vault:** Blocks secondary hidden OS spaces (Multiple Users, Guest Mode, OnePlus/ColorOS System Cloner, Work Profiles, and Android 15+ Private Space) behind a 12-hour Daylight-only countdown, while keeping regular Dual Apps (like Dual WhatsApp) and File Private Safe 100% usable.
 
 ---
 
