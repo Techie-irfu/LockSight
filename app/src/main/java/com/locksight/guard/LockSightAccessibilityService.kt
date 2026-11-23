@@ -2,6 +2,7 @@ package com.locksight.guard
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.media.AudioManager
 import android.os.Build
@@ -26,7 +27,6 @@ class LockSightAccessibilityService : AccessibilityService() {
             } catch (_: Exception) {}
         }
 
-        // 1. BLOCKED WEBSITE DOMAINS
         val BLOCKED_URL_DOMAINS = listOf(
             "1337x.", "1377x.", "1337xx.", "x1337x.", "thepiratebay.", "pirateproxy.",
             "torrentgalaxy.", "tgx.rs", "rargb.", "limetorrents.", "dirtytorrents.",
@@ -35,7 +35,6 @@ class LockSightAccessibilityService : AccessibilityService() {
             "eporner.", "hqporner.", "chaturbate.", "stripchat.", "hanime."
         )
 
-        // 2. BLOCKED EXPLICIT SEARCH KEYWORDS
         val BLOCKED_SEARCH_KEYWORDS = listOf(
             "pornhub", "xvideos", "xnxx", "xhamster", "redgifs", "spankbang", "celebmasta",
             "brazzers", "naughtyamerica", "onlyfans leak", "chaturbate", "stripchat",
@@ -50,7 +49,6 @@ class LockSightAccessibilityService : AccessibilityService() {
             "camgirl", "rule34", "hentai video", "hentai porn", "jav porn", "desipapa"
         )
 
-        // 3. APPS EXEMPT FROM SEARCH KEYWORD BLOCKING
         private val KEYWORD_EXEMPT_APP_TOKENS = listOf(
             "whatsapp", "signal", "mms", "messaging", "dialer", "contacts",
             "gmail", "outlook", "mail", "protonmail",
@@ -59,11 +57,11 @@ class LockSightAccessibilityService : AccessibilityService() {
         )
     }
 
-    // Loaded ASYNCHRONOUSLY on background thread so Main UI Thread NEVER freezes on the logo!
     @Volatile private var aiScanner: NsfwAiScanner? = null
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var lastScanTime = 0L
+    private var lastSettingsContentTime = 0L
     private var lastTreeCheckTime = 0L
     private var lastUserActivityTime = 0L
     private var lastSettingsToastTime = 0L
@@ -74,11 +72,14 @@ class LockSightAccessibilityService : AccessibilityService() {
     private var guardToast: Toast? = null
     @Volatile private var isScanInProgress = false
 
-    // Calm 2.5s heartbeat (0% CPU when screen off or idle -> keeps Poco M5 / Narzo 50 / OnePlus 12 cool!)
+    // Ultra-low-battery heartbeat: 3.0s normal, 4.5s in Power Saver, 0% when screen OFF or idle!
     private val videoHeartbeatRunnable = object : Runnable {
         override fun run() {
+            var nextDelay = 3000L
             try {
                 val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                if (pm.isPowerSaveMode) nextDelay = 4500L
+
                 if (pm.isInteractive && aiScanner != null) {
                     val rootPkg = rootInActiveWindow?.packageName?.toString() ?: ""
                     val activePkg = if (rootPkg.isNotEmpty() && !isIgnoredSystemOrKeyboardPackage(rootPkg)) {
@@ -87,13 +88,13 @@ class LockSightAccessibilityService : AccessibilityService() {
                     } else {
                         currentForegroundPkg
                     }
-                    val recentlyActive = (System.currentTimeMillis() - lastUserActivityTime) < 15000L
+                    val recentlyActive = (System.currentTimeMillis() - lastUserActivityTime) < 12000L
                     if (shouldScanPackage(activePkg) && (isContinuousMediaApp(activePkg) || recentlyActive)) {
                         runSilentAiScreenCheck(activePkg, forceImmediate = false)
                     }
                 }
             } catch (_: Exception) {}
-            mainHandler.postDelayed(this, 2500L)
+            mainHandler.postDelayed(this, nextDelay)
         }
     }
 
@@ -114,65 +115,84 @@ class LockSightAccessibilityService : AccessibilityService() {
         activeInstance = this
         lastUserActivityTime = System.currentTimeMillis()
 
-        // CRITICAL STABILITY FIX: Load ONNX 320n model & browser cache on background thread!
-        // Main UI Thread returns in < 1ms -> ZERO logo freezes and ZERO ANRs!
-        executor.execute {
-            try {
-                PolicyController.refreshCachedBrowsers(applicationContext)
-                aiScanner = NsfwAiScanner(applicationContext)
-            } catch (_: Exception) {}
-        }
+        // Defer ONNX load by 2.5s so fresh-install MainActivity cold launch NEVER freezes on the logo!
+        mainHandler.postDelayed({
+            if (activeInstance == this) {
+                executor.execute {
+                    try {
+                        PolicyController.refreshCachedBrowsers(applicationContext)
+                        aiScanner = NsfwAiScanner(applicationContext)
+                    } catch (_: Exception) {}
+                }
+            }
+        }, 2500L)
 
         if (PolicyController.prefs(this).getBoolean("safe_payment_mode_active", false)) {
             PolicyController.restoreAfterAccessibilityReenabled(this)
             showSingleToast("Safe Payment Mode OFF! All apps restored.")
         }
-        mainHandler.postDelayed(videoHeartbeatRunnable, 2500L)
+        mainHandler.postDelayed(videoHeartbeatRunnable, 3500L)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val pkg = event?.packageName?.toString() ?: return
         val now = System.currentTimeMillis()
         lastUserActivityTime = now
+        val evType = event.eventType
 
-// 1. UNIVERSAL CROSS-BRAND SETTINGS, PRIVACY CONTROLS & OEM PHONE MANAGER GUARD (0ms delay!)
-        // Strictly runs ONLY inside Settings / Privacy / OEM Security packages -> NEVER touches Notes or Gemini!
+        // 1. ZERO-LATENCY SETTINGS, PRIVACY CONTROLS & OEM PHONE MANAGER GUARD
         if (isSettingsOrPrivacyGuardPackage(pkg)) {
-            if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED && isClickOnLockSightRemoveAccess(event)) {
-                performGlobalAction(GLOBAL_ACTION_BACK)
-                PolicyController.scheduleSelfHealAccessibility(this)
-                if (now - lastSettingsToastTime > 2000L) {
-                    lastSettingsToastTime = now
-                    showSingleToast("LockSight: Access is locked by System Administrator.")
+            // NEVER throttle click events inside Settings / Phone Manager!
+            if (evType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+                // 1A. Targeted "Remove access" inside Privacy Controls
+                if (isClickOnLockSightRemoveAccess(event)) {
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                    PolicyController.scheduleSelfHealAccessibility(this)
+                    showDebouncedSettingsToast(now, "LockSight: Access is locked by System Administrator.")
+                    return
                 }
+
+                // 1B. Surgical Phone Manager / OEM Allowlist Guard (works immediately, allows other apps & Add!)
+                if (isClickRemovingLockSightFromOemProtection(event)) {
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                    showDebouncedSettingsToast(now, "LockSight: Protected inside OEM Security Allowlist.")
+                    return
+                }
+
+                // 1C. Pre-emptively block tapping "LockSight" row inside Accessibility "Downloaded apps" list!
+                // Stops spamming from ever reaching the toggle screen, even 1 second after a fresh install!
+                if (isClickOpeningLockSightFromAccessibilityList(event)) {
+                    triggerSettingsKickback(now)
+                    return
+                }
+            }
+
+            // NEVER throttle TYPE_WINDOW_STATE_CHANGED! Only throttle rapid duplicate content changes (60ms).
+            if (evType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED && (now - lastSettingsContentTime) < 60L) {
                 return
+            }
+            if (evType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+                lastSettingsContentTime = now
             }
 
             if (isLockSightTamperScreenActive(event)) {
-                if (now - lastSettingsBlockHitTime < 3000L) {
-                    rapidSettingsTamperCount++
-                } else {
-                    rapidSettingsTamperCount = 1
-                }
-                lastSettingsBlockHitTime = now
-
-                if (rapidSettingsTamperCount >= 2) {
-                    performGlobalAction(GLOBAL_ACTION_HOME)
-                } else {
-                    performGlobalAction(GLOBAL_ACTION_BACK)
-                }
-
-                if (now - lastSettingsToastTime > 2000L) {
-                    lastSettingsToastTime = now
-                    showSingleToast("LockSight: Protection is locked by System Administrator.")
-                }
+                triggerSettingsKickback(now)
                 return
             }
             return
         }
 
-        // 2. FAST TYPED KEYWORD INTERCEPTOR (No heavy tree scan needed!)
-        if (event.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
+        // 2. BRAND-AGNOSTIC OEM SECURITY CLICK FALLBACK (Catches unknown brand Phone Managers on any phone!)
+        if (evType == AccessibilityEvent.TYPE_VIEW_CLICKED && isPotentialUnknownOemSystemPkg(pkg)) {
+            if (isClickRemovingLockSightFromOemProtection(event)) {
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                showDebouncedSettingsToast(now, "LockSight: Protected inside OEM Security Allowlist.")
+                return
+            }
+        }
+
+        // 3. FAST TYPED KEYWORD INTERCEPTOR
+        if (evType == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
             val typedText = event.text?.joinToString(" ")?.lowercase()?.trim() ?: ""
             if (typedText.isNotEmpty() && typedText.length <= 80) {
                 val activeApp = if (isIgnoredSystemOrKeyboardPackage(pkg)) currentForegroundPkg else pkg
@@ -195,14 +215,13 @@ class LockSightAccessibilityService : AccessibilityService() {
         currentForegroundPkg = pkg
         if (pkg == packageName) return
 
-        // 3. THROTTLED NODE-TREE CHECKS (Max once every 180ms -> keeps scrolling 120Hz silky smooth!)
-        if (now - lastTreeCheckTime >= 180L) {
+        // 4. THROTTLED NODE-TREE CHECKS (Max once every 240ms -> smooth scrolling & negligible CPU!)
+        if (now - lastTreeCheckTime >= 240L) {
             lastTreeCheckTime = now
             val root = rootInActiveWindow
             if (root != null) {
-                // 3A. Reddit 18+ Mature Toggle Guard
                 if (pkg == "com.reddit.frontpage") {
-                    if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+                    if (evType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
                         val clickedText = ((event.text?.joinToString(" ") ?: "") + " " + (event.contentDescription ?: "")).lowercase()
                         if (clickedText.contains("mature content") || clickedText.contains("over 18") || clickedText.contains("blur nsfw")) {
                             performGlobalAction(GLOBAL_ACTION_BACK)
@@ -210,9 +229,10 @@ class LockSightAccessibilityService : AccessibilityService() {
                             return
                         }
                     }
-                    val isNsfwGatePopup = containsText(root, listOf("must be 18+", "mature content", "nsfw")) &&
-                            containsText(root, listOf("continue", "yes, i'm over 18", "view community")) &&
-                            !containsText(root, listOf("account settings", "dark mode"))
+                    val screenTxt = collectNodeTextFast(root, maxNodes = 80)
+                    val isNsfwGatePopup = (screenTxt.contains("must be 18+") || screenTxt.contains("mature content") || screenTxt.contains("nsfw")) &&
+                            (screenTxt.contains("continue") || screenTxt.contains("yes, i'm over 18") || screenTxt.contains("view community")) &&
+                            !screenTxt.contains("account settings") && !screenTxt.contains("dark mode")
                     if (isNsfwGatePopup) {
                         performGlobalAction(GLOBAL_ACTION_BACK)
                         showSingleToast("LockSight: 18+ NSFW Reddit community blocked.")
@@ -220,7 +240,6 @@ class LockSightAccessibilityService : AccessibilityService() {
                     }
                 }
 
-                // 3B. Universal Browser & Social Search/URL Bar Guard
                 if (shouldCheckKeywordsInApp(pkg, root)) {
                     val isBrowser = PolicyController.getCachedBrowserPackages(this).contains(pkg) ||
                             pkg.contains("opera") || pkg.contains("chrome") || pkg.contains("brave") ||
@@ -237,44 +256,132 @@ class LockSightAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 4. EVENT-DRIVEN AI SCREEN SCAN
+        // 5. EVENT-DRIVEN AI SCREEN SCAN
         if (aiScanner != null && shouldScanPackage(pkg)) {
-            when (event.eventType) {
+            when (evType) {
                 AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                     runSilentAiScreenCheck(pkg, forceImmediate = false)
                     mainHandler.removeCallbacks(scrollSettleScanRunnable)
-                    mainHandler.postDelayed(scrollSettleScanRunnable, 480L)
+                    mainHandler.postDelayed(scrollSettleScanRunnable, 500L)
                 }
                 AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
                 AccessibilityEvent.TYPE_VIEW_CLICKED -> {
                     mainHandler.removeCallbacks(scrollSettleScanRunnable)
-                    mainHandler.postDelayed(scrollSettleScanRunnable, 420L)
+                    mainHandler.postDelayed(scrollSettleScanRunnable, 440L)
                 }
             }
+        }
+    }
+
+    private fun triggerSettingsKickback(now: Long) {
+        if (now - lastSettingsBlockHitTime < 3000L) {
+            rapidSettingsTamperCount++
+        } else {
+            rapidSettingsTamperCount = 1
+        }
+        lastSettingsBlockHitTime = now
+
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        if (rapidSettingsTamperCount >= 2) {
+            mainHandler.postDelayed({ performGlobalAction(GLOBAL_ACTION_HOME) }, 80L)
+        }
+        showDebouncedSettingsToast(now, "LockSight: Protection is locked by System Administrator.")
+    }
+
+    private fun showDebouncedSettingsToast(now: Long, msg: String) {
+        if (now - lastSettingsToastTime > 2000L) {
+            lastSettingsToastTime = now
+            showSingleToast(msg)
         }
     }
 
     private fun isSettingsOrPrivacyGuardPackage(pkg: String): Boolean {
         val lower = pkg.lowercase()
         return lower == "com.android.settings" ||
+                lower.contains("oplus.settings") ||
+                lower.contains("coloros.settings") ||
+                lower.contains("vivo.settings") ||
+                lower.contains("miui.settings") ||
+                lower.contains("samsung.android.settings") ||
                 lower.contains("accessibility") ||
                 lower.contains("deviceadmin") ||
                 lower.contains("safetycenter") ||
                 lower.contains("permissioncontroller") ||
-                lower.contains("securitycenter") ||
+                lower.contains("phonemanager") ||
+                lower.contains("securitypermission") ||
+                lower.contains("securityguard") ||
                 lower.contains("safecenter") ||
+                lower.contains("securitycenter") ||
                 lower.contains("oneplus.security") ||
-                lower.contains("com.vivo.settings") ||
-                lower.contains("com.iqoo.secure") ||
-                lower.contains("com.samsung.android.lool")
+                lower.contains("iqoo.secure") ||
+                lower.contains("imanager") ||
+                lower.contains("samsung.android.lool") ||
+                lower.contains("samsung.android.sm") ||
+                lower.contains("systemmanager")
     }
 
-    /**
-     * Cross-brand tamper detector (OnePlus OxygenOS/ColorOS, iQOO/Vivo, Xiaomi HyperOS,
-     * Samsung One UI, Stock Android & Android Privacy Controls 'Remove access' card).
-     */
+    private fun isPotentialUnknownOemSystemPkg(pkg: String): Boolean {
+        val lower = pkg.lowercase()
+        return lower.startsWith("com.oplus.") ||
+                lower.startsWith("com.coloros.") ||
+                lower.startsWith("com.heytap.") ||
+                lower.startsWith("com.miui.") ||
+                lower.startsWith("com.xiaomi.") ||
+                lower.startsWith("com.vivo.") ||
+                lower.startsWith("com.iqoo.") ||
+                lower.startsWith("com.samsung.") ||
+                lower.startsWith("com.huawei.") ||
+                lower.startsWith("com.hihonor.")
+    }
+
+    private fun collectNodeTextFast(root: AccessibilityNodeInfo?, maxNodes: Int = 120, maxDepth: Int = 12): String {
+        if (root == null) return ""
+        val sb = StringBuilder(512)
+        val queue = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
+        queue.add(root to 0)
+        var visited = 0
+
+        while (queue.isNotEmpty() && visited < maxNodes) {
+            val (node, depth) = queue.removeFirst()
+            visited++
+
+            val t = node.text
+            if (!t.isNullOrEmpty()) sb.append(t).append(' ')
+            val cd = node.contentDescription
+            if (!cd.isNullOrEmpty()) sb.append(cd).append(' ')
+
+            if (depth < maxDepth) {
+                val count = node.childCount
+                for (i in 0 until count) {
+                    node.getChild(i)?.let { queue.add(it to (depth + 1)) }
+                }
+            }
+        }
+        return sb.toString().lowercase()
+    }
+
+    private fun isClickOpeningLockSightFromAccessibilityList(event: AccessibilityEvent): Boolean {
+        val clickedText = ((event.text?.joinToString(" ") ?: "") + " " + (event.contentDescription ?: "")).lowercase().trim()
+        if (!clickedText.contains("locksight")) return false
+        val screenText = collectNodeTextFast(rootInActiveWindow, maxNodes = 80)
+
+        // Never intercept taps inside MIUI/HyperOS "Other permissions" or regular App Info screens
+        if (screenText.contains("other permissions") ||
+            screenText.contains("search among") ||
+            screenText.contains("storage usage") ||
+            screenText.contains("battery usage")
+        ) {
+            return false
+        }
+
+        return screenText.contains("downloaded apps") ||
+                screenText.contains("downloaded services") ||
+                screenText.contains("installed apps") ||
+                screenText.contains("installed services") ||
+                screenText.contains("accessibility")
+    }
+
     private fun isLockSightTamperScreenActive(event: AccessibilityEvent?): Boolean {
-        // Fast check on event text (catches OnePlus 'Disable "LockSight"?' & Stock 'Stop LockSight?' popups instantly!)
         val evText = ((event?.text?.joinToString(" ") ?: "") + " " + (event?.contentDescription ?: "")).lowercase()
         if (evText.contains("disable \"locksight\"") ||
             evText.contains("disable locksight") ||
@@ -287,14 +394,19 @@ class LockSightAccessibilityService : AccessibilityService() {
         }
 
         val root = rootInActiveWindow
-        if (root != null && isLockSightDetailOrDialogNode(root)) return true
+        if (root != null) {
+            val screenText = collectNodeTextFast(root)
+            if (isLockSightDetailOrDialogText(screenText)) return true
+        }
 
         try {
             val winList = windows
             if (winList != null) {
                 for (w in winList) {
                     val wRoot = w.root ?: continue
-                    if (isLockSightDetailOrDialogNode(wRoot)) return true
+                    if (wRoot == root) continue
+                    val wText = collectNodeTextFast(wRoot, maxNodes = 40, maxDepth = 8)
+                    if (isLockSightDetailOrDialogText(wText)) return true
                 }
             }
         } catch (_: Exception) {}
@@ -302,65 +414,70 @@ class LockSightAccessibilityService : AccessibilityService() {
         return false
     }
 
-    private fun isLockSightDetailOrDialogNode(root: AccessibilityNodeInfo): Boolean {
-        if (!containsText(root, listOf("locksight"))) return false
+    private fun isLockSightDetailOrDialogText(screenText: String): Boolean {
+        if (!screenText.contains("locksight")) return false
 
-        // Allow normal App Info screen (so users can check Battery / Storage / Notifications)
-        val isNormalAppInfo = containsText(root, listOf("storage usage", "manage notifications", "battery usage", "data usage"))
-        if (isNormalAppInfo) return false
-
-        // Allow the main Accessibility 'Downloaded apps' / 'Installed apps' list so other apps remain usable!
-        val isMainListScreen = containsText(
-            root,
-            listOf(
-                "talkback", "select to speak", "display size", "color and motion",
-                "hearing enhancements", "vision enhancements", "downloaded apps",
-                "installed apps", "installed services", "accessibility on-screen keyboard"
-            )
-        )
-        if (isMainListScreen) return false
-
-        // 1B. Sealed-Only Phone Manager Allowlist Guard (stops removing LockSight from Allowlist during an urge!)
-        if (PolicyController.isSystemSealed(this)) {
-            val isPhoneManagerAllowlist = containsText(
-                root,
-                listOf("allowlist", "suspicious activity by the following apps", "block suspicious app activities", "abnormal device control")
-            )
-            if (isPhoneManagerAllowlist) return true
+        // Allow normal App Info & MIUI/HyperOS "Other permissions" app lists
+        if (screenText.contains("storage usage") ||
+            screenText.contains("manage notifications") ||
+            screenText.contains("battery usage") ||
+            screenText.contains("data usage") ||
+            screenText.contains("other permissions") ||
+            screenText.contains("search among") ||
+            screenText.contains("high-risk permissions")
+        ) {
+            return false
         }
 
-        // 2. OnePlus / Oppo / Realme (OxygenOS/ColorOS) & iQOO / Vivo (Funtouch/OriginOS) detail screens:
-        // Shows 'LockSight' toggle + 'Shortcut' + ('App info' OR 'About this function' OR 'Accessibility')
-        val isOemDetailPage = containsText(root, listOf("shortcut")) &&
-                containsText(root, listOf("app info", "about this function", "after accessibility features", "auto-launch", "service"))
-        if (isOemDetailPage) return true
+        // Allow main Accessibility list screens across Pixel, OnePlus, iQOO/Vivo, Xiaomi & Samsung
+        if (screenText.contains("talkback") ||
+            screenText.contains("select to speak") ||
+            screenText.contains("display size") ||
+            screenText.contains("color and motion") ||
+            screenText.contains("hearing enhancements") ||
+            screenText.contains("vision enhancements") ||
+            screenText.contains("downloaded apps") ||
+            screenText.contains("downloaded services") ||
+            screenText.contains("installed apps") ||
+            screenText.contains("installed services") ||
+            screenText.contains("switch access") ||
+            screenText.contains("timing controls") ||
+            screenText.contains("accessibility menu") ||
+            screenText.contains("accessibility shortcuts") ||
+            screenText.contains("interaction control") ||
+            screenText.contains("accessibility on-screen keyboard")
+        ) {
+            return false
+        }
 
-        // 3. OnePlus / iQOO / Stock Disable Confirmation Dialogs & Device Admin Screens:
-        return containsText(
-            root,
-            listOf(
-                "disable \"locksight\"",
-                "disable locksight",
-                "keep on",
-                "use locksight",
-                "use service",
-                "locksight shortcut",
-                "stop locksight",
-                "tapping stop",
-                "turn off locksight",
-                "about this function",
-                "deactivate this device admin",
-                "remove active admin",
-                "options and permissions"
-            )
-        )
+        // OnePlus (OxygenOS/ColorOS) & iQOO/Vivo (OriginOS/Funtouch OS) LockSight detail screens
+        if (screenText.contains("shortcut") &&
+            (screenText.contains("app info") ||
+                    screenText.contains("about this function") ||
+                    screenText.contains("after accessibility features"))
+        ) {
+            return true
+        }
+
+        return screenText.contains("disable \"locksight\"") ||
+                screenText.contains("disable locksight") ||
+                (screenText.contains("keep on") && screenText.contains("turn off")) ||
+                screenText.contains("use locksight") ||
+                screenText.contains("use service") ||
+                screenText.contains("locksight shortcut") ||
+                screenText.contains("stop locksight") ||
+                screenText.contains("tapping stop") ||
+                screenText.contains("turn off locksight") ||
+                screenText.contains("about this function") ||
+                screenText.contains("deactivate this device admin") ||
+                screenText.contains("remove active admin") ||
+                screenText.contains("options and permissions")
     }
 
     private fun isClickOnLockSightRemoveAccess(event: AccessibilityEvent): Boolean {
         val clickedText = ((event.text?.joinToString(" ") ?: "") + " " + (event.contentDescription ?: "")).lowercase().trim()
         if (clickedText.length > 35 || !clickedText.contains("remove access")) return false
 
-        // Climb up ONLY inside the clicked alert card (stop before ScrollView/RecyclerView so other apps are never affected)
         var node = event.source?.parent
         var depth = 0
         while (node != null && depth < 4) {
@@ -368,18 +485,99 @@ class LockSightAccessibilityService : AccessibilityService() {
             if (cls.contains("scrollview") || cls.contains("recyclerview") || cls.contains("listview")) {
                 break
             }
-            if (containsText(node, listOf("locksight"))) {
+            if (collectNodeTextFast(node, maxNodes = 25, maxDepth = 5).contains("locksight")) {
                 return true
             }
             node = node.parent
             depth++
         }
 
-        // Fallback when event.source is null on custom OEM skins: check only if LockSight is in the visible review card
         if (event.source == null) {
-            val root = rootInActiveWindow ?: return false
-            return containsText(root, listOf("review app with full device access")) &&
-                    containsText(root, listOf("locksight"))
+            val txt = collectNodeTextFast(rootInActiveWindow, maxNodes = 90)
+            return txt.contains("review app with full device access") && txt.contains("locksight")
+        }
+        return false
+    }
+
+    private fun isClickRemovingLockSightFromOemProtection(event: AccessibilityEvent): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val screenText = collectNodeTextFast(root, maxNodes = 100)
+
+        // Always allow adding LockSight to the allowlist!
+        if (screenText.contains("add to allowlist")) return false
+        if (!screenText.contains("locksight")) return false
+
+        val isProtectionListScreen = screenText.contains("remove from exceptions") ||
+                screenText.contains("suspicious activity by the following apps") ||
+                screenText.contains("never auto sleeping") ||
+                screenText.contains("autostart") ||
+                screenText.contains("protected apps") ||
+                screenText.contains("high background power consumption")
+        if (!isProtectionListScreen) return false
+
+        val clickedText = ((event.text?.joinToString(" ") ?: "") + " " + (event.contentDescription ?: "")).lowercase().trim()
+
+        // Allow entering Edit mode & managing other apps
+        if (clickedText == "edit" || clickedText == "cancel" || clickedText == "add apps") return false
+
+        // 1. Block "Select all" while LockSight is listed on the removal screen
+        if (clickedText == "select all" || clickedText == "all") return true
+
+        // 2. Block clicking "Remove from exceptions" / "Remove" if LockSight is checked
+        if (clickedText.contains("remove from exceptions") || clickedText == "remove") {
+            if (isLockSightCheckboxCheckedInTree(root)) return true
+        }
+
+        // 3. Direct click on LockSight row text
+        if (clickedText.length <= 45 && clickedText.contains("locksight")) return true
+
+        // 4. Click on LockSight's checkbox/switch inside its row container
+        var node = event.source
+        var depth = 0
+        while (node != null && depth < 4) {
+            val cls = node.className?.toString()?.lowercase() ?: ""
+            if (cls.contains("recyclerview") || cls.contains("listview") || cls.contains("scrollview")) {
+                break
+            }
+            if (collectNodeTextFast(node, maxNodes = 15, maxDepth = 4).contains("locksight")) {
+                return true
+            }
+            node = node.parent
+            depth++
+        }
+        return false
+    }
+
+    private fun isLockSightCheckboxCheckedInTree(root: AccessibilityNodeInfo): Boolean {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var visited = 0
+        while (queue.isNotEmpty() && visited < 100) {
+            val node = queue.removeFirst()
+            visited++
+            val t = (node.text?.toString() ?: "").lowercase()
+            if (t.contains("locksight")) {
+                val row = node.parent?.parent ?: node.parent ?: node
+                if (hasAnyCheckedBox(row)) return true
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
+            }
+        }
+        return false
+    }
+
+    private fun hasAnyCheckedBox(container: AccessibilityNodeInfo): Boolean {
+        val q = ArrayDeque<AccessibilityNodeInfo>()
+        q.add(container)
+        var visited = 0
+        while (q.isNotEmpty() && visited < 20) {
+            val n = q.removeFirst()
+            visited++
+            if (n.isCheckable && n.isChecked) return true
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { q.add(it) }
+            }
         }
         return false
     }
@@ -391,7 +589,8 @@ class LockSightAccessibilityService : AccessibilityService() {
         if (PolicyController.getFastExcludedAppsSet(this).contains(pkg)) return false
 
         if (lower.contains("googlequicksearchbox") && root != null) {
-            if (containsText(root, listOf("ask gemini", "gemini", "talk live", "gems", "deep research"))) {
+            val txt = collectNodeTextFast(root, maxNodes = 60, maxDepth = 8)
+            if (txt.contains("ask gemini") || txt.contains("gemini") || txt.contains("talk live") || txt.contains("gems")) {
                 return false
             }
         }
@@ -450,48 +649,41 @@ class LockSightAccessibilityService : AccessibilityService() {
         return !excluded.contains(pkg)
     }
 
-    private fun checkSearchOrUrlBarForExplicitInput(node: AccessibilityNodeInfo?, isBrowser: Boolean): Boolean {
-        if (node == null) return false
-        val id = node.viewIdResourceName?.lowercase() ?: ""
-        val className = node.className?.toString()?.lowercase() ?: ""
-        val text = node.text?.toString()?.lowercase()?.trim() ?: ""
+    private fun checkSearchOrUrlBarForExplicitInput(root: AccessibilityNodeInfo?, isBrowser: Boolean): Boolean {
+        if (root == null) return false
+        val queue = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
+        queue.add(root to 0)
+        var visited = 0
 
-        if (text.isNotEmpty() && text.length <= 80) {
-            val isSearchOrUrlInput = node.isEditable ||
-                    node.isFocused ||
-                    className.contains("edittext") ||
-                    id.contains("url") ||
-                    id.contains("address") ||
-                    id.contains("search") ||
-                    id.contains("omnibox")
+        while (queue.isNotEmpty() && visited < 85) {
+            val (node, depth) = queue.removeFirst()
+            visited++
 
-            if (isSearchOrUrlInput) {
-                if (BLOCKED_URL_DOMAINS.any { text.contains(it) } || text.contains("/xxx")) {
-                    return true
-                }
-                if (BLOCKED_SEARCH_KEYWORDS.any { query -> text.contains(query) }) {
-                    return true
-                }
-            } else if (isBrowser && (text.startsWith("http") || text.contains(".to/") || text.contains(".tw/") || text.contains("1337x"))) {
-                if (BLOCKED_URL_DOMAINS.any { text.contains(it) } || text.contains("/xxx")) {
-                    return true
+            val text = node.text?.toString()?.lowercase()?.trim() ?: ""
+            if (text.isNotEmpty() && text.length <= 80) {
+                val id = node.viewIdResourceName?.lowercase() ?: ""
+                val className = node.className?.toString()?.lowercase() ?: ""
+                val isSearchOrUrlInput = node.isEditable ||
+                        node.isFocused ||
+                        className.contains("edittext") ||
+                        id.contains("url") ||
+                        id.contains("address") ||
+                        id.contains("search") ||
+                        id.contains("omnibox")
+
+                if (isSearchOrUrlInput) {
+                    if (BLOCKED_URL_DOMAINS.any { text.contains(it) } || text.contains("/xxx")) return true
+                    if (BLOCKED_SEARCH_KEYWORDS.any { text.contains(it) }) return true
+                } else if (isBrowser && (text.startsWith("http") || text.contains(".to/") || text.contains(".tw/") || text.contains("1337x"))) {
+                    if (BLOCKED_URL_DOMAINS.any { text.contains(it) } || text.contains("/xxx")) return true
                 }
             }
-        }
 
-        for (i in 0 until node.childCount) {
-            if (checkSearchOrUrlBarForExplicitInput(node.getChild(i), isBrowser)) return true
-        }
-        return false
-    }
-
-    private fun containsText(node: AccessibilityNodeInfo?, targets: List<String>): Boolean {
-        if (node == null) return false
-        val txt = (node.text?.toString() ?: "") + " " + (node.contentDescription?.toString() ?: "")
-        val lower = txt.lowercase()
-        if (targets.any { lower.contains(it) }) return true
-        for (i in 0 until node.childCount) {
-            if (containsText(node.getChild(i), targets)) return true
+            if (depth < 10) {
+                for (i in 0 until node.childCount) {
+                    node.getChild(i)?.let { queue.add(it to (depth + 1)) }
+                }
+            }
         }
         return false
     }
@@ -520,7 +712,7 @@ class LockSightAccessibilityService : AccessibilityService() {
         if (isScanInProgress && (now - lastScanTime) > 2500L) {
             isScanInProgress = false
         }
-        val minInterval = if (forceImmediate) 320L else 1400L
+        val minInterval = if (forceImmediate) 320L else 1500L
         if (isScanInProgress || (now - lastScanTime) < minInterval) return
 
         lastScanTime = now
@@ -536,9 +728,10 @@ class LockSightAccessibilityService : AccessibilityService() {
                         val colorSpace = screenshot.colorSpace
                         val hwBitmap = Bitmap.wrapHardwareBuffer(hwBuffer, colorSpace)
                         if (hwBitmap != null) {
-                            val targetW = 480
+                            // 384px wide: 36% less RAM & bandwidth on low-end phones while staying sharper than 320px input!
+                            val targetW = 384
                             val targetH = ((hwBitmap.height.toFloat() / hwBitmap.width.toFloat()) * targetW)
-                                .toInt().coerceIn(480, 1080)
+                                .toInt().coerceIn(384, 864)
                             val compactHw = Bitmap.createScaledBitmap(hwBitmap, targetW, targetH, true)
                             val softBitmap = compactHw.copy(Bitmap.Config.ARGB_8888, false)
                             if (compactHw != hwBitmap) compactHw.recycle()
@@ -583,7 +776,7 @@ class LockSightAccessibilityService : AccessibilityService() {
         )
     }
 
-    override fun onUnbind(intent: android.content.Intent?): Boolean {
+    override fun onUnbind(intent: Intent?): Boolean {
         PolicyController.scheduleSelfHealAccessibility(this)
         return super.onUnbind(intent)
     }
@@ -593,6 +786,9 @@ class LockSightAccessibilityService : AccessibilityService() {
         mainHandler.removeCallbacks(videoHeartbeatRunnable)
         mainHandler.removeCallbacks(scrollSettleScanRunnable)
         mainHandler.removeCallbacks(fastRecheckRunnable)
+        try {
+            executor.shutdownNow()
+        } catch (_: Exception) {}
         PolicyController.scheduleSelfHealAccessibility(this)
         super.onDestroy()
     }

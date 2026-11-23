@@ -10,38 +10,48 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
+import android.util.Log
 import java.nio.FloatBuffer
+import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 
 class NsfwAiScanner(context: Context) {
 
     companion object {
+        private const val TAG = "LockSightAI"
         private const val INPUT_SIZE = 320
 
         private val LABELS = arrayOf(
             "FEMALE_GENITALIA_COVERED", // 0  (Level 2)
-            "FACE_FEMALE",              // 1  (Face Mask)
+            "FACE_FEMALE",              // 1  (Female Face Mask)
             "BUTTOCKS_EXPOSED",         // 2  (Level 1)
             "FEMALE_BREAST_EXPOSED",    // 3  (Level 1)
             "FEMALE_GENITALIA_EXPOSED", // 4  (Level 1)
-            "MALE_BREAST_EXPOSED",      // 5  (Ignored)
+            "MALE_BREAST_EXPOSED",      // 5  (Male Chest Mask)
             "ANUS_EXPOSED",             // 6  (Level 1)
             "FEET_EXPOSED",             // 7  (Ignored)
             "BELLY_COVERED",            // 8  (Ignored)
             "FEET_COVERED",             // 9  (Ignored)
             "ARMPITS_COVERED",          // 10 (Ignored)
             "ARMPITS_EXPOSED",          // 11 (Ignored)
-            "FACE_MALE",                // 12 (Face Mask)
-            "BELLY_EXPOSED",            // 13 (Level 3)
+            "FACE_MALE",                // 12 (Male Face Mask)
+            "BELLY_EXPOSED",            // 13 (Level 3 — Female Context Only)
             "MALE_GENITALIA_EXPOSED",   // 14 (Level 1 — Contextual Co-Detection)
             "ANUS_COVERED",             // 15 (Level 2)
-            "FEMALE_BREAST_COVERED",    // 16 (Level 3)
+            "FEMALE_BREAST_COVERED",    // 16 (Level 3 — Male-Chest Suppressed)
             "BUTTOCKS_COVERED"          // 17 (Level 2)
         )
 
         private val EXPOSED_LEVEL1_CLASSES = setOf(2, 3, 4, 6, 14)
         private val FEMALE_EXPLICIT_CONTEXT_CLASSES = setOf(2, 3, 4, 6)
+        private val CHEST_OR_MIDRIFF_CLASSES = setOf(3, 13, 16)
+
+        @Volatile private var sharedEnv: OrtEnvironment? = null
+        @Volatile private var sharedSession: OrtSession? = null
+        @Volatile private var sharedInputName: String = "images"
+        private val sessionLock = Any()
     }
 
     private var ortEnv: OrtEnvironment? = null
@@ -61,7 +71,15 @@ class NsfwAiScanner(context: Context) {
     private var consecutiveHits = 0
     private var lastHitClass = -1
 
-    private data class Box(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val score: Float, val classId: Int)
+    private data class Box(
+        val x1: Float,
+        val y1: Float,
+        val x2: Float,
+        val y2: Float,
+        val score: Float,
+        val classId: Int,
+        val sameAnchorMaleBreast: Float = 0f
+    )
 
     data class ScanResult(
         val blocked: Boolean,
@@ -74,19 +92,28 @@ class NsfwAiScanner(context: Context) {
     )
 
     init {
-        try {
-            val env = OrtEnvironment.getEnvironment()
-            val opts = OrtSession.SessionOptions().apply {
-                setIntraOpNumThreads(2)
-                setInterOpNumThreads(1)
-                setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+        synchronized(sessionLock) {
+            if (sharedSession == null) {
+                try {
+                    val env = OrtEnvironment.getEnvironment()
+                    val opts = OrtSession.SessionOptions().apply {
+                        setIntraOpNumThreads(2)
+                        setInterOpNumThreads(1)
+                        setCPUArenaAllocator(false)
+                        setMemoryPatternOptimization(true)
+                        setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+                    }
+                    val modelBytes = context.assets.open("320n.onnx").use { it.readBytes() }
+                    sharedEnv = env
+                    sharedSession = env.createSession(modelBytes, opts)
+                    sharedSession?.inputNames?.firstOrNull()?.let { sharedInputName = it }
+                } catch (_: Exception) {
+                    sharedSession = null
+                }
             }
-            val modelBytes = context.assets.open("320n.onnx").use { it.readBytes() }
-            ortEnv = env
-            ortSession = env.createSession(modelBytes, opts)
-            ortSession?.inputNames?.firstOrNull()?.let { inputName = it }
-        } catch (_: Exception) {
-            ortSession = null
+            ortEnv = sharedEnv
+            ortSession = sharedSession
+            inputName = sharedInputName
         }
     }
 
@@ -140,7 +167,7 @@ class NsfwAiScanner(context: Context) {
                 if (winningBox == null || candidate.score > winningBox.score) {
                     winningBox = candidate
                 }
-                if (isExp && candidate.classId != 14 && candidate.score >= 0.72f) break
+                if (isExp && candidate.classId != 14 && candidate.score >= 0.80f) break
             }
         }
 
@@ -153,12 +180,10 @@ class NsfwAiScanner(context: Context) {
             val score = winningBox.score
             val className = LABELS[cls].replace("_", " ")
 
-            // Instant trigger for unmistakable female genitalia/anus (>= 0.70), breasts/buttocks (>= 0.80),
-            // or Class 14 ONLY when extremely high (>= 0.88). Moderate hits confirm in 350ms!
             val isInstant = when (cls) {
-                4, 6 -> score >= 0.70f
+                4, 6 -> score >= 0.74f
                 14 -> score >= 0.88f
-                3, 2 -> score >= 0.80f
+                3, 2 -> score >= 0.85f
                 else -> false
             }
 
@@ -180,6 +205,7 @@ class NsfwAiScanner(context: Context) {
                     triggerLabel = "Verifying $className (${(score * 100).toInt()}%)"
                 }
             }
+            Log.d(TAG, "DECISION L$aiLevel | cls=$className score=${(score * 100).toInt()}% blocked=$blocked recheck=$needsFastRecheck")
         } else {
             consecutiveHits = 0
             lastHitClass = -1
@@ -230,7 +256,9 @@ class NsfwAiScanner(context: Context) {
             nchwBuffer[2 * planeSize + i] = (px and 0xFF) * inv255
         }
 
-        val faceBoxes = mutableListOf<Box>()
+        val femaleFaceBoxes = mutableListOf<Box>()
+        val maleFaceBoxes = mutableListOf<Box>()
+        val maleBreastBoxes = mutableListOf<Box>()
         val rawCandidates = mutableListOf<Box>()
         var hasFemaleExplicitContext = false
 
@@ -251,6 +279,12 @@ class NsfwAiScanner(context: Context) {
                         for (a in 0 until numAnchors) {
                             var bestCls = -1
                             var bestScore = 0f
+
+                            // Multi-label read: ALWAYS capture Male Chest & Faces independently per anchor!
+                            val femaleFaceScore = if (isStandard) outBuf.get((4 + 1) * numAnchors + a) else outBuf.get(a * d2 + 4 + 1)
+                            val maleBreastScore = if (isStandard) outBuf.get((4 + 5) * numAnchors + a) else outBuf.get(a * d2 + 4 + 5)
+                            val maleFaceScore = if (isStandard) outBuf.get((4 + 12) * numAnchors + a) else outBuf.get(a * d2 + 4 + 12)
+
                             for (c in LABELS.indices) {
                                 val v = if (isStandard) {
                                     outBuf.get((4 + c) * numAnchors + a)
@@ -263,10 +297,11 @@ class NsfwAiScanner(context: Context) {
                                 }
                             }
 
-                            if (bestScore < 0.32f || bestCls == -1) continue
+                            val interestingMask = maleBreastScore >= 0.14f || femaleFaceScore >= 0.28f || maleFaceScore >= 0.28f
+                            if (bestScore < 0.34f && !interestingMask) continue
 
-                            var cx = if (isStandard) outBuf.get(0 * numAnchors + a) else outBuf.get(a * d2 + 0)
-                            var cy = if (isStandard) outBuf.get(1 * numAnchors + a) else outBuf.get(a * d2 + 1)
+                            var cx = if (isStandard) outBuf.get(a) else outBuf.get(a * d2)
+                            var cy = if (isStandard) outBuf.get(numAnchors + a) else outBuf.get(a * d2 + 1)
                             var bw = if (isStandard) outBuf.get(2 * numAnchors + a) else outBuf.get(a * d2 + 2)
                             var bh = if (isStandard) outBuf.get(3 * numAnchors + a) else outBuf.get(a * d2 + 3)
 
@@ -281,25 +316,32 @@ class NsfwAiScanner(context: Context) {
                             val x2 = (cx + bw * 0.5f).coerceIn(0f, activeW)
                             val y2 = (cy + bh * 0.5f).coerceIn(0f, activeH)
 
-                            if (bestCls == 1 || bestCls == 12) {
-                                faceBoxes.add(Box(x1, y1, x2, y2, bestScore, bestCls))
-                                continue
+                            // Record independent masks BEFORE candidate filtering
+                            if (femaleFaceScore >= 0.28f && bw >= 12f && bh >= 12f) {
+                                femaleFaceBoxes.add(Box(x1, y1, x2, y2, femaleFaceScore, 1))
+                            }
+                            if (maleFaceScore >= 0.28f && bw >= 12f && bh >= 12f) {
+                                maleFaceBoxes.add(Box(x1, y1, x2, y2, maleFaceScore, 12))
+                            }
+                            if (maleBreastScore >= 0.14f && bw >= 12f && bh >= 12f) {
+                                maleBreastBoxes.add(Box(x1, y1, x2, y2, maleBreastScore, 5))
                             }
 
-                            // Track if real female explicit anatomy is also present in this frame
-                            if (FEMALE_EXPLICIT_CONTEXT_CLASSES.contains(bestCls) && bestScore >= 0.38f && bw >= 14f && bh >= 14f) {
+                            if (bestCls == -1 || bestCls == 1 || bestCls == 12 || bestCls == 5 || bestScore < 0.36f) continue
+
+                            if (FEMALE_EXPLICIT_CONTEXT_CLASSES.contains(bestCls) && bestScore >= 0.44f && bw >= 14f && bh >= 14f) {
                                 hasFemaleExplicitContext = true
                             }
 
                             val minBoxSize = when (bestCls) {
-                                14 -> 20f // Rejects thin fingers, cables, tools, and mics
+                                14 -> 20f
                                 in EXPOSED_LEVEL1_CLASSES -> 14f
-                                else -> 22f
+                                else -> 24f
                             }
                             if (bw < minBoxSize || bh < minBoxSize) continue
                             if (bw > activeW * 0.94f && bh > activeH * 0.94f) continue
 
-                            rawCandidates.add(Box(x1, y1, x2, y2, bestScore, bestCls))
+                            rawCandidates.add(Box(x1, y1, x2, y2, bestScore, bestCls, maleBreastScore))
                         }
                     }
                 }
@@ -310,27 +352,110 @@ class NsfwAiScanner(context: Context) {
 
         if (rawCandidates.isEmpty()) return null
 
+        val allFaceBoxes = femaleFaceBoxes + maleFaceBoxes
         val verified = rawCandidates.filter { box ->
             meetsLevelThreshold(box.classId, box.score, aiLevel, hasFemaleExplicitContext)
         }.sortedByDescending { it.score }
 
         for (box in verified) {
-            // 1. Face-Overlap Rejection
-            val overlapsFace = faceBoxes.any { face -> computeIoU(box, face) >= 0.16f || isCenterInside(box, face) }
-            if (overlapsFace) continue
+            val clsName = LABELS[box.classId]
 
-            // 2. Universal YCbCr Skin-Tone Verification
-            // Class 14 (alone) requires a cleaner skin ratio (>= 0.34) to reject fingers holding grey metal tools/nuts!
-            if (EXPOSED_LEVEL1_CLASSES.contains(box.classId) || box.classId == 13) {
-                val skinRatio = computeYCbCrSkinRatioInsideBox(box)
-                val minSkin = if (box.classId == 14 && !hasFemaleExplicitContext) 0.34f else 0.22f
-                if (skinRatio < minSkin) continue
+            // 1. Face-Overlap Rejection (Protects portraits & Hijab)
+            val overlapsFace = allFaceBoxes.any { face -> computeIoU(box, face) >= 0.16f || isCenterInside(box, face) }
+            if (overlapsFace) {
+                Log.d(TAG, "SKIP_FACE L$aiLevel $clsName=${(box.score * 100).toInt()}%")
+                continue
             }
 
+            // 2. MULTI-LABEL MALE-CHEST & LOCAL MALE-FACE TORSO SUPPRESSION (Fixes video_1.mp4 in crowds!)
+            if (CHEST_OR_MIDRIFF_CLASSES.contains(box.classId)) {
+                val maxOverlapMb = maleBreastBoxes
+                    .filter { mb -> computeIoU(box, mb) >= 0.12f || isCenterInside(box, mb) || isCenterInside(mb, box) }
+                    .maxOfOrNull { it.score } ?: 0f
+                val effectiveMb = max(box.sameAnchorMaleBreast, maxOverlapMb)
+                val maleFaceOwner = isOwnedByMaleFace(box, maleFaceBoxes, femaleFaceBoxes)
+
+                if ((effectiveMb >= 0.14f && box.score < 0.92f) || (maleFaceOwner && box.score < 0.92f)) {
+                    Log.d(TAG, "SKIP_MALE_TORSO L$aiLevel $clsName=${(box.score * 100).toInt()}% mb=${(effectiveMb * 100).toInt()}% maleOwner=$maleFaceOwner")
+                    continue
+                }
+            }
+
+            // 3. INNER-CORE BLUR / CENSOR REJECTION ON LEVEL 1 (Fixes video_2.mp4 blurred GTA 6 thumbnail!)
+            val innerSharp = computeInnerCoreSharpness(box)
+            if (aiLevel == 1 && EXPOSED_LEVEL1_CLASSES.contains(box.classId)) {
+                val isBlurredCensor = when (box.classId) {
+                    4 -> box.score < 0.74f && innerSharp < 7.2f // Blurred genitalia thumbnails (e.g. 63%)
+                    3 -> box.score < 0.84f && innerSharp < 7.2f // Blurred chest thumbnails
+                    2, 6 -> box.score < 0.78f && innerSharp < 6.8f
+                    else -> false
+                }
+                if (isBlurredCensor) {
+                    Log.d(TAG, "SKIP_BLUR L$aiLevel $clsName=${(box.score * 100).toInt()}% innerSharp=${"%.1f".format(innerSharp)}")
+                    continue
+                }
+            }
+
+            // 4. Universal YCbCr Skin-Tone Verification
+            var skinRatio = 1f
+            if (EXPOSED_LEVEL1_CLASSES.contains(box.classId) || box.classId == 13) {
+                skinRatio = computeYCbCrSkinRatioInsideBox(box)
+                val minSkin = if (box.classId == 14 && !hasFemaleExplicitContext) 0.34f else 0.22f
+                if (skinRatio < minSkin) {
+                    Log.d(TAG, "SKIP_SKIN L$aiLevel $clsName=${(box.score * 100).toInt()}% skin=${(skinRatio * 100).toInt()}%")
+                    continue
+                }
+            }
+
+            Log.d(
+                TAG,
+                "PASS L$aiLevel $clsName=${(box.score * 100).toInt()}% mb=${(box.sameAnchorMaleBreast * 100).toInt()}% " +
+                        "sharp=${"%.1f".format(innerSharp)} skin=${(skinRatio * 100).toInt()}% " +
+                        "box=${(box.x2 - box.x1).toInt()}x${(box.y2 - box.y1).toInt()}"
+            )
             return box
         }
 
         return null
+    }
+
+    /**
+     * Checks local body geometry: if a MALE face sits directly above this chest/midriff box
+     * (and no FEMALE face sits closer above it), the torso belongs to a shirtless man—even in a crowd!
+     */
+    private fun isOwnedByMaleFace(
+        torsoBox: Box,
+        maleFaces: List<Box>,
+        femaleFaces: List<Box>
+    ): Boolean {
+        if (maleFaces.isEmpty()) return false
+        val tCx = (torsoBox.x1 + torsoBox.x2) * 0.5f
+        val tCy = (torsoBox.y1 + torsoBox.y2) * 0.5f
+        val tW = (torsoBox.x2 - torsoBox.x1).coerceAtLeast(1f)
+        val tH = (torsoBox.y2 - torsoBox.y1).coerceAtLeast(1f)
+
+        fun bestDistanceAbove(faces: List<Box>): Float {
+            var best = Float.MAX_VALUE
+            for (f in faces) {
+                val fCx = (f.x1 + f.x2) * 0.5f
+                val fCy = (f.y1 + f.y2) * 0.5f
+                val fW = (f.x2 - f.x1).coerceAtLeast(1f)
+                val fH = (f.y2 - f.y1).coerceAtLeast(1f)
+
+                val dy = tCy - fCy
+                val dx = abs(tCx - fCx)
+                if (dy > 0f && dy <= max(fH * 4.8f, tH * 4.5f) && dx <= max(fW * 2.4f, tW * 2.2f)) {
+                    val dist = hypot(dx.toDouble(), dy.toDouble()).toFloat()
+                    if (dist < best) best = dist
+                }
+            }
+            return best
+        }
+
+        val nearestMale = bestDistanceAbove(maleFaces)
+        if (nearestMale == Float.MAX_VALUE) return false
+        val nearestFemale = bestDistanceAbove(femaleFaces)
+        return nearestMale <= nearestFemale
     }
 
     private fun meetsLevelThreshold(
@@ -342,33 +467,70 @@ class NsfwAiScanner(context: Context) {
         return when (aiLevel) {
             1 -> {
                 when (classId) {
-                    4 -> score >= 0.50f // FEMALE GENITALIA EXPOSED
-                    // Class 14 (MALE GENITALIA EXPOSED):
-                    // - If seen alongside female explicit anatomy -> 0.55f
-                    // - If seen ALONE -> 0.80f (completely eliminates 71% thumb/nut & 60% fitness arm!)
+                    4 -> score >= 0.52f     // FEMALE GENITALIA EXPOSED (clear unblurred catches immediately)
                     14 -> if (hasFemaleExplicitContext) score >= 0.55f else score >= 0.80f
-                    6 -> score >= 0.54f // ANUS EXPOSED
-                    3 -> score >= 0.68f // FEMALE BREAST EXPOSED
-                    2 -> score >= 0.74f // BUTTOCKS EXPOSED
+                    6 -> score >= 0.54f     // ANUS EXPOSED
+                    3 -> score >= 0.75f     // FEMALE BREAST EXPOSED
+                    2 -> score >= 0.75f     // BUTTOCKS EXPOSED
                     else -> false
                 }
             }
             2 -> {
                 meetsLevelThreshold(classId, score, 1, hasFemaleExplicitContext) || when (classId) {
-                    3 -> score >= 0.58f
-                    2 -> score >= 0.62f
-                    0, 15, 17 -> score >= 0.62f
+                    3 -> score >= 0.64f
+                    2 -> score >= 0.66f
+                    0, 15, 17 -> score >= 0.64f
                     else -> false
                 }
             }
             else -> {
                 meetsLevelThreshold(classId, score, 2, hasFemaleExplicitContext) || when (classId) {
-                    16 -> score >= 0.58f
-                    13 -> score >= 0.62f
+                    16 -> score >= 0.64f    // FEMALE_BREAST_COVERED
+                    13 -> score >= 0.68f    // BELLY_EXPOSED
                     else -> false
                 }
             }
         }
+    }
+
+    /**
+     * Measures average pixel-to-pixel luminance gradient strictly inside the INNER 60% CORE
+     * of the bounding box so sharp background borders don't fool the blur/censor detector.
+     */
+    private fun computeInnerCoreSharpness(box: Box): Float {
+        val bw = box.x2 - box.x1
+        val bh = box.y2 - box.y1
+        val insetX = bw * 0.20f
+        val insetY = bh * 0.20f
+
+        val x1 = (box.x1 + insetX).toInt().coerceIn(1, INPUT_SIZE - 2)
+        val y1 = (box.y1 + insetY).toInt().coerceIn(1, INPUT_SIZE - 2)
+        val x2 = (box.x2 - insetX).toInt().coerceIn(x1 + 1, INPUT_SIZE - 1)
+        val y2 = (box.y2 - insetY).toInt().coerceIn(y1 + 1, INPUT_SIZE - 1)
+
+        val stepX = max(1, (x2 - x1) / 8)
+        val stepY = max(1, (y2 - y1) / 8)
+        var diffSum = 0f
+        var count = 0
+
+        var y = y1
+        while (y < y2) {
+            val rowOff = y * INPUT_SIZE
+            var x = x1
+            while (x < x2) {
+                val c = pixels[rowOff + x]
+                val r = pixels[rowOff + x + 1]
+                val d = pixels[(y + 1) * INPUT_SIZE + x]
+                val lC = ((c shr 16) and 0xFF) * 0.3f + ((c shr 8) and 0xFF) * 0.59f + (c and 0xFF) * 0.11f
+                val lR = ((r shr 16) and 0xFF) * 0.3f + ((r shr 8) and 0xFF) * 0.59f + (r and 0xFF) * 0.11f
+                val lD = ((d shr 16) and 0xFF) * 0.3f + ((d shr 8) and 0xFF) * 0.59f + (d and 0xFF) * 0.11f
+                diffSum += abs(lC - lR) + abs(lC - lD)
+                count++
+                x += stepX
+            }
+            y += stepY
+        }
+        return if (count == 0) 0f else diffSum / count.toFloat()
     }
 
     private fun computeYCbCrSkinRatioInsideBox(box: Box): Float {

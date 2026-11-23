@@ -60,6 +60,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mainScrollView: ScrollView
 
     private var currentTab = "SHIELD"
+    private var skipNextResumeRender = false
     private val mainTabsOrder = listOf("SHIELD", "ZEN", "REMINDERS")
 
     private var zenTimer: CountDownTimer? = null
@@ -278,6 +279,8 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
+        skipNextResumeRender = true
+
         mainScrollView = object : ScrollView(this) {
             override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
                 swipeDetector.onTouchEvent(ev)
@@ -325,8 +328,13 @@ class MainActivity : AppCompatActivity() {
         PolicyController.revertToMainDnsIfExpired(this)
         PolicyController.checkAndRestoreSafePayIfExpired(this)
         PolicyController.handleSelfHealAccessibility(this)
-        renderScreen()
-        liveTickerHandler.postDelayed(liveTickerRunnable, 15000L)
+        if (skipNextResumeRender) {
+            skipNextResumeRender = false
+        } else {
+            renderScreen()
+        }
+        liveTickerHandler.removeCallbacks(liveTickerRunnable)
+        liveTickerHandler.postDelayed(liveTickerRunnable, 30000L)
         safePayTickerHandler.removeCallbacks(safePayTickerRunnable)
         safePayTickerHandler.post(safePayTickerRunnable)
     }
@@ -1181,7 +1189,7 @@ class MainActivity : AppCompatActivity() {
             })
         })
 
-        // --- CARD 6B: OPTIONAL MULTI-USER, SYSTEM CLONER & PRIVATE SPACE LOCK ---
+// --- CARD 6B: OPTIONAL MULTI-USER, SYSTEM CLONER & PRIVATE SPACE LOCK ---
         rootLayout.addView(makeCard().apply {
             val isMultiLocked = PolicyController.isMultiUserLocked(this@MainActivity)
             val readyAt = prefs.getLong("multi_user_ready_at", 0L)
@@ -1189,13 +1197,13 @@ class MainActivity : AppCompatActivity() {
             val isReady = readyAt in 1..now
 
             val status = when {
-                !isMultiLocked -> "OPTIONAL • Currently Unlocked (Work/Clone Profiles Allowed)"
+                !isMultiLocked -> "OPTIONAL • Currently Unlocked"
                 readyAt > now -> "Unlock Countdown: ${(readyAt - now) / 3600000L}h ${((readyAt - now) % 3600000L) / 60000L}m left"
                 isReady -> "Ready to Unlock (Daylight 7 AM – 6 PM)"
                 else -> "LOCKED (Multiple Users, System Cloner & Private Space Blocked)"
             }
             addView(makeCardHeader("👥", "#EC4899", "Multi-User & System Cloner Vault (Optional)", status))
-            addView(makeBody("Closes the secondary-space loophole by blocking new Multiple Users, Guest Mode, System Cloner, App Clones, and Android Private Space. Leave unlocked if you genuinely need a Work Profile."))
+            addView(makeBody("Closes secondary-OS loopholes by blocking new Multiple Users, Guest Mode, System Cloner, Work Profiles, and Android Private Space. Regular App Cloner (Dual WhatsApp) and File Private Safe remain 100% usable."))
 
             addView(makeButton(
                 if (isMultiLocked) "✓ Multi-User, System Cloner & Private Space Locked" else "Lock Multi-User, System Cloner & Private Space",
@@ -1206,10 +1214,17 @@ class MainActivity : AppCompatActivity() {
                 renderScreen()
             })
             if (isMultiLocked) {
-                addView(makeButton("Start 12-Hour Unlock Countdown", "#334155", readyAt <= now) {
-                    PolicyController.startMultiUserUnlockCountdown(this@MainActivity, 12) { renderScreen() }
-                    toast("12-Hour Multi-User unlock countdown started.")
-                })
+                if (readyAt > now) {
+                    addView(makeButton("Cancel 12-Hour Unlock Countdown", "#EF4444", true) {
+                        toast(PolicyController.cancelMultiUserCountdown(this@MainActivity))
+                        renderScreen()
+                    })
+                } else {
+                    addView(makeButton("Start 12-Hour Unlock Countdown", "#334155", true) {
+                        PolicyController.startMultiUserUnlockCountdown(this@MainActivity, 12) { renderScreen() }
+                        toast("12-Hour Multi-User unlock countdown started.")
+                    })
+                }
                 if (isReady) {
                     addView(makeButton("Unlock Multi-User & System Cloner (7 AM – 6 PM)", "#10B981", true) {
                         toast(PolicyController.unlockMultiUserNow(this@MainActivity))
@@ -2178,7 +2193,7 @@ class MainActivity : AppCompatActivity() {
         })
 
         // --- SECTION 2: 6-LAYER ENTERPRISE SHIELD ---
-        rootLayout.addView(makeSectionLabel("What LockSight Solves (6-Layer Precision)"))
+        rootLayout.addView(makeSectionLabel("What LockSight Solves (7-Layer Precision)"))
         rootLayout.addView(makeCard().apply {
             addView(makeFeatureRow(
                 "🔒", "#38BDF8",
@@ -2211,8 +2226,14 @@ class MainActivity : AppCompatActivity() {
             ))
             addView(makeDivider())
             addView(makeFeatureRow(
+                "👥", "#EC4899",
+                "6. Multi-User & System Cloner Vault (Optional)",
+                "Blocks secondary OS spaces (Multiple Users, Guest Mode, System Cloner, Work Profiles & Android Private Space) behind a 12-hour Daylight unlock timer while keeping Dual WhatsApp and File Private Safe usable."
+            ))
+            addView(makeDivider())
+            addView(makeFeatureRow(
                 "🧘", "#F59E0B",
-                "6. Zen Sanctuary & Multi-Faith Discipline",
+                "7. Zen Sanctuary & Multi-Faith Discipline",
                 "Fullscreen urge-lockout sanctuary with melodic soundscapes, box breathing, a focus mini-game, clean-streak tracking, and personalized daily reflections."
             ))
         })

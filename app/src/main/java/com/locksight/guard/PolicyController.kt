@@ -30,6 +30,7 @@ object PolicyController {
     private var adBypassRunnable: Runnable? = null
     private val safePayHandler = Handler(Looper.getMainLooper())
     private var safePayAutoRestoreRunnable: Runnable? = null
+
     @Volatile private var cachedBrowsers: Set<String>? = null
     @Volatile private var cachedEligibleGames: List<Pair<String, String>>? = null
     @Volatile private var cachedEligibleBanks: List<Pair<String, String>>? = null
@@ -65,7 +66,6 @@ object PolicyController {
         return isDeviceOwner(ctx) && prefs(ctx).getBoolean("acc2_sealed", false)
     }
 
-    // --- LIVE OS RESTRICTION CHECKS ---
     fun isPrivateDnsLocked(ctx: Context): Boolean {
         if (!isDeviceOwner(ctx)) return false
         return try {
@@ -117,6 +117,9 @@ object PolicyController {
         return saved.isNotBlank()
     }
 
+    fun hasWriteSecureSettings(ctx: Context): Boolean =
+        ctx.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED
+
     // --- 1. NOTIFICATION ENGINE ---
     fun sendTimerNotification(ctx: Context, title: String, message: String, notifId: Int) {
         try {
@@ -149,7 +152,7 @@ object PolicyController {
         } catch (_: Exception) {}
     }
 
-    // --- 2. STRICT SAFE-DNS VALIDATOR & 15-DAY ELAPSED CYCLE ROTATOR ---
+    // --- 2. SAFE-DNS VALIDATOR & 15-DAY CYCLE ROTATOR ---
     fun isValidProtectedDnsInput(rawInput: String): Boolean {
         val cleaned = cleanHost(rawInput)
         val verifiedFamilyProviders = setOf(
@@ -179,7 +182,6 @@ object PolicyController {
     ) {
         val c1Main = cleanHost(acc1Main)
         val c1Bypass = cleanHost(acc1Bypass.ifBlank { c1Main })
-
         val hasValidAcc2 = useDualAccounts && acc2Main.trim().isNotEmpty()
         val c2Main = if (hasValidAcc2) cleanHost(acc2Main) else ""
         val c2Bypass = if (hasValidAcc2) cleanHost(acc2Bypass.ifBlank { c2Main }) else ""
@@ -206,12 +208,9 @@ object PolicyController {
         }
         val rawMain = acc2Main.trim()
         val rawBypass = acc2Bypass.trim().ifEmpty { rawMain }
-
-        if (rawMain.isEmpty()) {
-            return false to "Please enter your Account 2 Main NextDNS ID."
-        }
+        if (rawMain.isEmpty()) return false to "Please enter your Account 2 Main NextDNS ID."
         if (!isValidProtectedDnsInput(rawMain) || !isValidProtectedDnsInput(rawBypass)) {
-            return false to "Rejected: Unfiltered DNS detected! Enter a valid 6-char NextDNS ID (e.g. f9c2a1) or verified Family DNS."
+            return false to "Rejected: Unfiltered DNS detected! Enter a valid 6-char NextDNS ID or verified Family DNS."
         }
 
         val c2Main = cleanHost(rawMain)
@@ -232,7 +231,7 @@ object PolicyController {
         if (p.getLong("gplinks_bypass_until", 0L) <= System.currentTimeMillis()) {
             applyPrivateDns(ctx, getActiveMainDns(ctx))
         }
-        return true to "Account 2 Permanently Sealed! Account 1 remains active for Days 1–15, then auto-rotates to Account 2 on Day 16."
+        return true to "Account 2 Permanently Sealed! Rotates to Account 2 on Day 16."
     }
 
     private fun cleanHost(input: String): String {
@@ -248,8 +247,7 @@ object PolicyController {
     }
 
     fun getCurrentCycleDay(ctx: Context): Int {
-        val p = prefs(ctx)
-        val start = p.getLong("dns_cycle_start_epoch", 0L)
+        val start = prefs(ctx).getLong("dns_cycle_start_epoch", 0L)
         if (start == 0L) return 1
         val elapsedDays = ((System.currentTimeMillis() - start).coerceAtLeast(0L) / (24 * 3600 * 1000L)).toInt()
         return (elapsedDays % 30) + 1
@@ -268,13 +266,8 @@ object PolicyController {
         val dual = p.getBoolean("use_dual_accounts", false)
         val saved2 = p.getString("acc2_main", "") ?: ""
         if (!dual || saved2.isBlank()) return "Single Account (Full Month)"
-
         val cycleDay = getCurrentCycleDay(ctx)
-        return if (cycleDay <= 15) {
-            "Dual Mode • Acc 1 (Day $cycleDay/15)"
-        } else {
-            "Dual Mode • Acc 2 (Day $cycleDay/30)"
-        }
+        return if (cycleDay <= 15) "Dual Mode • Acc 1 (Day $cycleDay/15)" else "Dual Mode • Acc 2 (Day $cycleDay/30)"
     }
 
     fun getActiveMainDns(ctx: Context): String {
@@ -303,7 +296,7 @@ object PolicyController {
         }
     }
 
-    // --- 3. SEAL & LOCK NEXTDNS & UNINSTALL PROTECTION (SEPARATED FROM VPN & ADB LOCKS!) ---
+    // --- 3. SEAL & LOCK NEXTDNS & UNINSTALL PROTECTION (SEPARATED FROM VPN & ADB) ---
     fun sealAndLockSystem(ctx: Context) {
         if (!isDeviceOwner(ctx)) return
         val dpm = dpm(ctx)
@@ -337,7 +330,7 @@ object PolicyController {
         } catch (_: Exception) {}
     }
 
-    // --- 4. SELECTABLE (10M / 30M / 60M) AD-WALL BYPASS ---
+    // --- 4. AD-WALL BYPASS ---
     fun startAdShortenerBypass(ctx: Context, durationMinutes: Int, onUpdate: () -> Unit) {
         if (!isDeviceOwner(ctx)) return
         val appCtx = ctx.applicationContext
@@ -356,8 +349,8 @@ object PolicyController {
         onUpdate()
 
         val runnable = Runnable {
-            val wasActive = prefs(appCtx).getLong("gplinks_bypass_until", 0L) > 0L
-            if (wasActive && System.currentTimeMillis() >= prefs(appCtx).getLong("gplinks_bypass_until", 0L)) {
+            val savedUntil = prefs(appCtx).getLong("gplinks_bypass_until", 0L)
+            if (savedUntil > 0L && System.currentTimeMillis() >= savedUntil) {
                 prefs(appCtx).edit().putLong("gplinks_bypass_until", 0L).commit()
                 applyPrivateDns(appCtx, getActiveMainDns(appCtx))
                 sendTimerNotification(
@@ -453,21 +446,31 @@ object PolicyController {
     // --- 6A. SEALED CREATIVE APPS VPN MODE ---
     fun setCreativeVpnMode(ctx: Context, enable: Boolean): String {
         if (!isDeviceOwner(ctx)) return "Requires Device Owner mode."
-        val dpm = dpm(ctx)
-        val admin = admin(ctx)
-        val appsToSuspend = getAllRiskyAppsForVpnSuspension(ctx)
+        val appCtx = ctx.applicationContext
+        val dpm = dpm(appCtx)
+        val admin = admin(appCtx)
 
         return if (enable) {
-            dpm.setPackagesSuspended(admin, appsToSuspend, true)
-            dpm.addUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
-            dpm.clearUserRestriction(admin, UserManager.DISALLOW_CONFIG_VPN)
-            prefs(ctx).edit().putBoolean("creative_vpn_active", true).commit()
+            Thread {
+                try {
+                    val appsToSuspend = getAllRiskyAppsForVpnSuspension(appCtx)
+                    dpm.setPackagesSuspended(admin, appsToSuspend, true)
+                    dpm.addUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
+                    dpm.clearUserRestriction(admin, UserManager.DISALLOW_CONFIG_VPN)
+                } catch (_: Exception) {}
+            }.start()
+            prefs(appCtx).edit().putBoolean("creative_vpn_active", true).commit()
             "Creative VPN Mode ON! Editors can use VPN. All Browsers, Social Apps & Play Store Installs are suspended."
         } else {
-            dpm.addUserRestriction(admin, UserManager.DISALLOW_CONFIG_VPN)
-            dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
-            dpm.setPackagesSuspended(admin, appsToSuspend, false)
-            prefs(ctx).edit().putBoolean("creative_vpn_active", false).commit()
+            Thread {
+                try {
+                    val appsToSuspend = getAllRiskyAppsForVpnSuspension(appCtx)
+                    dpm.addUserRestriction(admin, UserManager.DISALLOW_CONFIG_VPN)
+                    dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
+                    dpm.setPackagesSuspended(admin, appsToSuspend, false)
+                } catch (_: Exception) {}
+            }.start()
+            prefs(appCtx).edit().putBoolean("creative_vpn_active", false).commit()
             "Creative VPN Mode Relocked! All Browsers & Apps are restored."
         }
     }
@@ -476,20 +479,16 @@ object PolicyController {
         val pm = ctx.packageManager
         val browsers = getCachedBrowserPackages(ctx)
         val verifiedEditors = setOf(
-            "com.lemon.lvoverseas",
-            "com.frontrow.vlog",
-            "com.camerasideas.instashot",
-            "com.nexstreaming.app.kinemasterfree",
-            "com.adobe.lrmobile",
-            "com.canva.editor"
+            "com.lemon.lvoverseas", "com.frontrow.vlog", "com.camerasideas.instashot",
+            "com.nexstreaming.app.kinemasterfree", "com.adobe.lrmobile", "com.canva.editor"
         )
         val riskyKeywords = listOf(
             "browser", "opera", "chrome", "firefox", "brave", "ucmobile", "tor", "duckduckgo",
             "telegram", "reddit", "twitter", "instagram", "facebook", "discord", "threads",
             "torrent", "torrdroid", "flud", "libre", "moviebox", "hdobox", "beetv", "teatv"
         )
-        val installed = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-        return installed.map { it.packageName }
+        return pm.getInstalledApplications(0)
+            .map { it.packageName }
             .filter { pkg ->
                 pkg != ctx.packageName &&
                         pkg != "com.android.settings" &&
@@ -499,20 +498,22 @@ object PolicyController {
             .toTypedArray()
     }
 
-    // --- 6B. CHECKOUT-SAFE PAYMENT MODE (RELIABLE ALARM-BACKED 3-MIN AUTO-RESTORE) ---
+    // --- 6B. CHECKOUT-SAFE PAYMENT MODE (NON-BLOCKING + ALARM-BACKED 3-MIN AUTO-RESTORE) ---
     fun setSafePaymentMode(ctx: Context, enable: Boolean): String {
         val appCtx = ctx.applicationContext
         val p = prefs(appCtx)
-        val appsToSuspend = getAllRiskyAppsForPaymentSuspension(appCtx)
 
         return if (enable) {
             cancelSafePayAlarms(appCtx)
 
             if (isDeviceOwner(appCtx)) {
-                try {
-                    dpm(appCtx).setPackagesSuspended(admin(appCtx), appsToSuspend, true)
-                    dpm(appCtx).addUserRestriction(admin(appCtx), UserManager.DISALLOW_INSTALL_APPS)
-                } catch (_: Exception) {}
+                Thread {
+                    try {
+                        val appsToSuspend = getAllRiskyAppsForPaymentSuspension(appCtx)
+                        dpm(appCtx).setPackagesSuspended(admin(appCtx), appsToSuspend, true)
+                        dpm(appCtx).addUserRestriction(admin(appCtx), UserManager.DISALLOW_INSTALL_APPS)
+                    } catch (_: Exception) {}
+                }.start()
             }
 
             val until = System.currentTimeMillis() + (3 * 60 * 1000L)
@@ -522,11 +523,8 @@ object PolicyController {
                 .commit()
 
             LockSightAccessibilityService.requestSelfDisableForPaymentMode()
-
-            // 1. OS-level AlarmManager backup (fires reliably even in Doze/background!)
             scheduleSafePayAlarm(appCtx, until)
 
-            // 2. Fast in-process Handler backup while active
             val autoRestore = Runnable { handleSafePayTimerExpired(appCtx) }
             safePayAutoRestoreRunnable = autoRestore
             safePayHandler.postDelayed(autoRestore, 3 * 60 * 1000L + 500L)
@@ -623,7 +621,6 @@ object PolicyController {
         } catch (_: Exception) {}
     }
 
-    // Clicking this notification opens Android's Accessibility Settings directly!
     private fun sendAccessibilityRestoreNotification(ctx: Context, title: String, message: String) {
         try {
             val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -657,18 +654,13 @@ object PolicyController {
         } catch (_: Exception) {}
     }
 
-    fun hasWriteSecureSettings(ctx: Context): Boolean =
-        ctx.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED
-
     fun scheduleSelfHealAccessibility(ctx: Context) {
         val appCtx = ctx.applicationContext
         if (!isSystemSealed(appCtx) && !hasWriteSecureSettings(appCtx)) return
         if (prefs(appCtx).getBoolean("safe_payment_mode_active", false)) return
 
-        // Fast in-process heal attempt at 1.5s
         safePayHandler.postDelayed({ handleSelfHealAccessibility(appCtx) }, 1500L)
 
-        // OS AlarmManager backup at 3s (survives background kill by system/OEM!)
         try {
             val am = appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             val intent = Intent(appCtx, AdminReceiver::class.java).apply {
@@ -702,7 +694,7 @@ object PolicyController {
         if (isAccessibilityServiceEnabled(ctx)) return true
         val myService = "${ctx.packageName}/${LockSightAccessibilityService::class.java.canonicalName}"
 
-        if (ctx.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED) {
+        if (hasWriteSecureSettings(ctx)) {
             try {
                 val current = Settings.Secure.getString(
                     ctx.contentResolver,
@@ -729,12 +721,15 @@ object PolicyController {
 
         val p = prefs(appCtx)
         if (!p.getBoolean("safe_payment_mode_active", false)) return
-        val appsToUnsuspend = getAllRiskyAppsForPaymentSuspension(appCtx)
+
         if (isDeviceOwner(appCtx)) {
-            try {
-                dpm(appCtx).clearUserRestriction(admin(appCtx), UserManager.DISALLOW_INSTALL_APPS)
-                dpm(appCtx).setPackagesSuspended(admin(appCtx), appsToUnsuspend, false)
-            } catch (_: Exception) {}
+            Thread {
+                try {
+                    val appsToUnsuspend = getAllRiskyAppsForPaymentSuspension(appCtx)
+                    dpm(appCtx).clearUserRestriction(admin(appCtx), UserManager.DISALLOW_INSTALL_APPS)
+                    dpm(appCtx).setPackagesSuspended(admin(appCtx), appsToUnsuspend, false)
+                } catch (_: Exception) {}
+            }.start()
         }
         p.edit()
             .putBoolean("safe_payment_mode_active", false)
@@ -750,7 +745,7 @@ object PolicyController {
             "gallery", "photos", "vlc", "mxtech", "video", "player", "torrent", "torrdroid", "flud",
             "moviebox", "hdobox", "beetv", "teatv", "netmirror", "substack", "upscrolled"
         )
-        return pm.getInstalledApplications(PackageManager.GET_META_DATA)
+        return pm.getInstalledApplications(0)
             .map { it.packageName }
             .filter { pkg ->
                 pkg != ctx.packageName &&
@@ -826,7 +821,7 @@ object PolicyController {
         }
     }
 
-    // --- 8. SEPARATE ADB & DEVELOPER OPTIONS LOCK + FORCE-STOP PROTECTION ---
+    // --- 8A. SEPARATE ADB & DEVELOPER OPTIONS LOCK ---
     fun isDaylightWindow(): Boolean {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
         return hour in 7..17
@@ -858,9 +853,7 @@ object PolicyController {
         val admin = admin(ctx)
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                dpm.setUserControlDisabledPackages(admin, emptyList())
-            } catch (_: Exception) {}
+            try { dpm.setUserControlDisabledPackages(admin, emptyList()) } catch (_: Exception) {}
         }
 
         val lockAt = now + (60 * 60 * 1000L)
@@ -888,8 +881,7 @@ object PolicyController {
         val activeUntil = prefs(ctx).getLong("adb_active_until", 0L)
         if (System.currentTimeMillis() >= activeUntil) return "ADB is not currently unlocked."
         if (!isDaylightWindow()) return "Daylight window ended (after 6:00 PM). Extension denied."
-        val newUntil = activeUntil + (60 * 60 * 1000L)
-        prefs(ctx).edit().putLong("adb_active_until", newUntil).commit()
+        prefs(ctx).edit().putLong("adb_active_until", activeUntil + (60 * 60 * 1000L)).commit()
         return "ADB extended by 1 additional hour."
     }
 
@@ -899,9 +891,7 @@ object PolicyController {
         val admin = admin(ctx)
         dpm.addUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                dpm.setUserControlDisabledPackages(admin, listOf(ctx.packageName))
-            } catch (_: Exception) {}
+            try { dpm.setUserControlDisabledPackages(admin, listOf(ctx.packageName)) } catch (_: Exception) {}
         }
         prefs(ctx).edit()
             .putBoolean("adb_manually_sealed", true)
@@ -919,9 +909,7 @@ object PolicyController {
             val admin = admin(ctx)
             dpm.addUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                try {
-                    dpm.setUserControlDisabledPackages(admin, listOf(ctx.packageName))
-                } catch (_: Exception) {}
+                try { dpm.setUserControlDisabledPackages(admin, listOf(ctx.packageName)) } catch (_: Exception) {}
             }
             prefs(ctx).edit().putLong("adb_active_until", 0L).apply()
         }
@@ -945,14 +933,16 @@ object PolicyController {
         val admin = admin(ctx)
         try { dpm.addUserRestriction(admin, UserManager.DISALLOW_ADD_USER) } catch (_: Exception) {}
         try { dpm.addUserRestriction(admin, UserManager.DISALLOW_ADD_MANAGED_PROFILE) } catch (_: Exception) {}
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            try { dpm.addUserRestriction(admin, "no_add_clone_profile") } catch (_: Exception) {}
-        }
         if (Build.VERSION.SDK_INT >= 35) {
             try { dpm.addUserRestriction(admin, "no_add_private_profile") } catch (_: Exception) {}
         }
         prefs(ctx).edit().putLong("multi_user_ready_at", 0L).commit()
-        return "Multi-User, Guest Mode, System Cloner & Private Space are now LOCKED."
+        return "Multiple Users, Guest Mode, System Cloner & Private Space are now LOCKED. (Dual Apps stay usable!)"
+    }
+
+    fun cancelMultiUserCountdown(ctx: Context): String {
+        prefs(ctx).edit().putLong("multi_user_ready_at", 0L).commit()
+        return "Multi-User unlock countdown cancelled. Vault remains locked."
     }
 
     fun startMultiUserUnlockCountdown(ctx: Context, hours: Int, onUpdate: () -> Unit) {
@@ -980,9 +970,6 @@ object PolicyController {
         val admin = admin(ctx)
         try { dpm.clearUserRestriction(admin, UserManager.DISALLOW_ADD_USER) } catch (_: Exception) {}
         try { dpm.clearUserRestriction(admin, UserManager.DISALLOW_ADD_MANAGED_PROFILE) } catch (_: Exception) {}
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            try { dpm.clearUserRestriction(admin, "no_add_clone_profile") } catch (_: Exception) {}
-        }
         if (Build.VERSION.SDK_INT >= 35) {
             try { dpm.clearUserRestriction(admin, "no_add_private_profile") } catch (_: Exception) {}
         }
@@ -1002,13 +989,7 @@ object PolicyController {
                 ctx.contentResolver,
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
             ) ?: ""
-            val updated = if (current.isEmpty()) {
-                myService
-            } else if (!current.contains(myService)) {
-                "$current:$myService"
-            } else {
-                current
-            }
+            val updated = if (current.isEmpty()) myService else if (!current.contains(myService)) "$current:$myService" else current
             dpm.setSecureSetting(admin, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, updated)
             dpm.setSecureSetting(admin, Settings.Secure.ACCESSIBILITY_ENABLED, "1")
         } catch (_: Exception) {}
@@ -1026,7 +1007,7 @@ object PolicyController {
         }, minutes * 60 * 1000L)
     }
 
-    // --- 10. FAST IN-MEMORY BROWSER CACHE & EXPANDED GAMES / BANKING LISTS ---
+    // --- 10. FAST IN-MEMORY CACHES & EXPANDED GAMES / BANKING LISTS ---
     fun refreshCachedBrowsers(ctx: Context): Set<String> {
         return try {
             val pm = ctx.packageManager
@@ -1041,10 +1022,7 @@ object PolicyController {
         }
     }
 
-    fun getCachedBrowserPackages(ctx: Context): Set<String> {
-        return cachedBrowsers ?: refreshCachedBrowsers(ctx)
-    }
-
+    fun getCachedBrowserPackages(ctx: Context): Set<String> = cachedBrowsers ?: refreshCachedBrowsers(ctx)
     fun getAllBrowserPackages(ctx: Context): Set<String> = getCachedBrowserPackages(ctx)
 
     fun getFastExcludedAppsSet(ctx: Context): Set<String> {
@@ -1056,18 +1034,6 @@ object PolicyController {
     }
 
     fun getAllExcludedApps(ctx: Context): Set<String> = getFastExcludedAppsSet(ctx)
-
-    private fun isForbiddenMediaOrSocialApp(ctx: Context, pkg: String): Boolean {
-        if (getCachedBrowserPackages(ctx).contains(pkg)) return true
-        val forbiddenKeywords = listOf(
-            "browser", "opera", "chrome", "firefox", "brave", "ucmobile", "tor", "webview",
-            "telegram", "reddit", "twitter", "instagram", "tiktok", "discord", "facebook", "whatsapp",
-            "vlc", "mxtech", "video", "player", "torrent", "torrdroid", "flud",
-            "moviebox", "hdobox", "beetv", "teatv", "gallery", "photos", "youtube", "netflix"
-        )
-        val lower = pkg.lowercase()
-        return forbiddenKeywords.any { lower.contains(it) }
-    }
 
     fun prewarmExcludedAppCachesAsync(ctx: Context) {
         val appCtx = ctx.applicationContext
@@ -1088,7 +1054,6 @@ object PolicyController {
         val cached = if (isGames) cachedEligibleGames else cachedEligibleBanks
         if (cached != null) {
             onReady(cached)
-            // Refresh silently in background for next tap
             Thread {
                 if (isGames) cachedEligibleGames = getEligibleGameApps(ctx.applicationContext)
                 else cachedEligibleBanks = getEligibleBankingApps(ctx.applicationContext)
@@ -1105,9 +1070,21 @@ object PolicyController {
         }.start()
     }
 
+    private fun isForbiddenMediaOrSocialApp(ctx: Context, pkg: String): Boolean {
+        if (getCachedBrowserPackages(ctx).contains(pkg)) return true
+        val forbiddenKeywords = listOf(
+            "browser", "opera", "chrome", "firefox", "brave", "ucmobile", "tor", "webview",
+            "telegram", "reddit", "twitter", "instagram", "tiktok", "discord", "facebook", "whatsapp",
+            "vlc", "mxtech", "video", "player", "torrent", "torrdroid", "flud",
+            "moviebox", "hdobox", "beetv", "teatv", "gallery", "photos", "youtube", "netflix"
+        )
+        val lower = pkg.lowercase()
+        return forbiddenKeywords.any { lower.contains(it) }
+    }
+
     fun getEligibleGameApps(ctx: Context): List<Pair<String, String>> {
         val pm = ctx.packageManager
-        val installed = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+        val installed = pm.getInstalledApplications(0)
         val gameAndEmulatorKeywords = listOf(
             "dominations", "bgmi", "pubg", "tencent", "krafton", "activision", "supercell",
             "garena", "riot", "mihoyo", "hoyoverse", "epicgames", "roblox", "minecraft", "ea.",
@@ -1137,39 +1114,18 @@ object PolicyController {
 
     fun getEligibleBankingApps(ctx: Context): List<Pair<String, String>> {
         val pm = ctx.packageManager
-        val installed = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+        val installed = pm.getInstalledApplications(0)
         val verifiedBanksAndFintech = setOf(
-            "com.google.android.apps.nbu.paisa.user",
-            "com.phonepe.app",
-            "net.one97.paytm",
-            "in.org.npci.upiapp",
-            "com.dreamplug.androidapp",
-            "com.mobikwik_new",
-            "money.super.payments",
-            "com.coupl.app",
-            "indwin.c3.shareapp",
-            "org.altruist.BajajExperia",
-            "com.bajajfinservmarkets.app",
-            "com.freecharge.android",
-            "com.naviapp",
-            "com.fampay.in",
-            "money.jupiter",
-            "com.epifi.paisa",
-            "com.myairtelapp",
-            "com.jio.myjio",
-            "in.amazon.mShop.android.shopping",
-            "com.indusind.indusmobile",
-            "com.sbi.lotusintouch",
-            "com.csam.icici.bank.imobile",
-            "com.axis.mobile",
-            "com.snapwork.hdfc",
-            "com.canarabank.mobility",
-            "com.msf.kbank.mobile",
-            "com.idfcfirstbank.optimus",
-            "com.fedmobile",
-            "com.rblbank.mobank",
-            "com.bob.bobworld",
-            "com.Version1",
+            "com.google.android.apps.nbu.paisa.user", "com.phonepe.app", "net.one97.paytm",
+            "in.org.npci.upiapp", "com.dreamplug.androidapp", "com.mobikwik_new",
+            "money.super.payments", "com.coupl.app", "indwin.c3.shareapp",
+            "org.altruist.BajajExperia", "com.bajajfinservmarkets.app", "com.freecharge.android",
+            "com.naviapp", "com.fampay.in", "money.jupiter", "com.epifi.paisa",
+            "com.myairtelapp", "com.jio.myjio", "in.amazon.mShop.android.shopping",
+            "com.indusind.indusmobile", "com.sbi.lotusintouch", "com.csam.icici.bank.imobile",
+            "com.axis.mobile", "com.snapwork.hdfc", "com.canarabank.mobility",
+            "com.msf.kbank.mobile", "com.idfcfirstbank.optimus", "com.fedmobile",
+            "com.rblbank.mobank", "com.bob.bobworld", "com.Version1",
             "com.paypal.android.p2pmobile"
         )
         val financeAndDocKeywords = listOf(
