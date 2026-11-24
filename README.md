@@ -6,6 +6,7 @@ A free, open-source Android content shield built for people who are tired of byp
 [![Android 11+](https://img.shields.io/badge/Android-11%2B%20(API%2030%2B)-10B981?style=flat-square)](https://github.com/Techie-irfu/LockSight/releases)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL--3.0-F59E0B?style=flat-square)](./LICENSE)
 [![Support on Ko-fi](https://img.shields.io/badge/Support-Ko--fi-FF5E5B?style=flat-square&logo=ko-fi)](https://ko-fi.com/techieirfu)
+[![Add to Obtainium](https://img.shields.io/badge/Add_to-Obtainium-8B5CF6?style=flat-square&logo=android&logoColor=white)](https://apps.obtainium.imranr.dev/redirect.html?r=obtainium://add/https://github.com/Techie-irfu/LockSight)
 
 ---
 
