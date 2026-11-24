@@ -1,0 +1,15 @@
+LockSight is a free, open-source Android content shield built for people who want a reliable, tamper-resistant blocker without monthly subscriptions, cloud tracking, or battery-draining background VPNs.
+
+Unlike standard Play Store blockers that rely on easily bypassed Device Admin captchas or 24/7 local VPN tunnels, LockSight uses Android Enterprise Device Owner APIs to lock filtering at the OS level while keeping your phone fast for gaming, banking, and everyday apps.
+
+Key Features:
+
+* OS-Level Private DNS Lock: Grays out Android's native Private DNS menu with 0ms gaming ping impact and zero idle battery drain.
+* Single or Dual NextDNS Rotation: Works with 1 NextDNS account or rotates automatically between 2 free accounts every 15 days (600,000 queries/month).
+* Aegis Neural Core (100% Offline AI): Runs NudeNet v3 (320n.onnx) locally on-device via ONNX Runtime with static-frame skipping (0% idle CPU), 3 sensitivity levels, and separate exclusion lists for Games/Emulators and Banking/KYC apps.
+* Ad-Wall Bypass & Local DPI Splitter: Temporarily bypass ad-shorteners (10m/30m/1h or 15m Quick Settings tile) without unlocking adult sites, and fragment SNI packets locally for ISP-throttled domains.
+* Safe Payment Mode (UPI & Banking Ready): One-tap 3-minute Quick Settings tile pauses Accessibility for strict payment apps while keeping browsers and shopping apps open on locked NextDNS, then auto-restores protection.
+* Separate Anti-Soft-Lock Vaults: Private DNS, Third-Party VPN Lock, Multi-User/System Cloner Lock, and Daylight-Only ADB Lock (12h/24h countdown, 7 AM - 6 PM) are all controlled independently so you never accidentally lock yourself out.
+* Zen Sanctuary & Multi-Faith Discipline: Fullscreen urge-lockout mode with offline nature soundscapes (birds, rain, ocean, wind), box breathing, focus arcade games, clean-streak tracking, and Islamic, Hindu, Christian, Universal, or Minimal daily reflections.
+
+Requirements: Android 11+ and a one-time USB ADB command (Windows one-click installer scripts included on GitHub Releases).
