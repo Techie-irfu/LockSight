@@ -8,11 +8,47 @@
   <meta name="keywords" content="LockSight, Android porn blocker, bypass proof blocker Android, Device Owner blocker, NextDNS Android, Aegis Vision Guard, NudeNet Android, open source content blocker" />
   <meta name="author" content="Mohammed Irfan (@Techie-irfu)" />
   <link rel="canonical" href="https://techie-irfu.github.io/LockSight/" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b0f19'/%3E%3Cpath d='M32 10L14 18v14c0 11.5 7.7 22.2 18 26 10.3-3.8 18-14.5 18-26V18L32 10z' fill='%2338bdf8'/%3E%3Ccircle cx='32' cy='32' r='6' fill='%230b0f19'/%3E%3C/svg%3E" />
+
+  <!-- Open Graph & Social Card Previews (Reddit, WhatsApp, Telegram, X) -->
   <meta property="og:title" content="LockSight — Bypass-Proof Android Content Blocker" />
-  <meta property="og:description" content="Seals every technical bypass route at the Android OS level while keeping gaming, banking, and UPI 100% normal." />
+  <meta property="og:description" content="Free, open-source Android 11+ shield using Enterprise Device Owner, zero-ping NextDNS, and offline ONNX AI—without breaking gaming, banking, or UPI." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://techie-irfu.github.io/LockSight/" />
+  <meta property="og:image" content="https://raw.githubusercontent.com/Techie-irfu/LockSight/main/screenshots/shield.jpg" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="LockSight — Bypass-Proof Android Content Blocker" />
+  <meta name="twitter:description" content="Enterprise Device Owner + Zero-Ping NextDNS + Offline ONNX AI for Android 11+." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/Techie-irfu/LockSight/main/screenshots/shield.jpg" />
+
+  <!-- Google Search Console Verification -->
   <meta name="google-site-verification" content="t-b_B7H5o4Y9dkDNGtkJzPG1LZNsxMFuP9ySL6xNENg" />
+
+  <!-- Structured Data for Google Search (SoftwareApplication) -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "LockSight",
+    "operatingSystem": "Android 11+",
+    "applicationCategory": "UtilitiesApplication",
+    "license": "https://www.gnu.org/licenses/agpl-3.0.en.html",
+    "url": "https://techie-irfu.github.io/LockSight/",
+    "downloadUrl": "https://github.com/Techie-irfu/LockSight/releases/latest",
+    "author": {
+      "@type": "Person",
+      "name": "Mohammed Irfan",
+      "url": "https://github.com/Techie-irfu"
+    },
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "description": "Free, open-source Android content blocker using Enterprise Device Owner, zero-ping NextDNS rotation, and offline ONNX anatomical vision detection."
+  }
+  </script>
+
   <style>
     :root {
       --bg: #0b0f19;
@@ -35,7 +71,7 @@
     .container { max-width: 960px; margin: 0 auto; }
     header {
       text-align: center;
-      padding: 60px 20px 40px;
+      padding: 56px 16px 40px;
       border-bottom: 1px solid var(--border);
     }
     .badge {
@@ -49,12 +85,12 @@
       font-weight: 600;
       margin-bottom: 16px;
     }
-    h1 { font-size: 2.8rem; letter-spacing: -0.02em; margin-bottom: 16px; }
+    h1 { font-size: clamp(2.1rem, 5vw, 2.9rem); letter-spacing: -0.02em; margin-bottom: 16px; }
     .subtitle {
       max-width: 680px;
       margin: 0 auto 30px;
       color: var(--muted);
-      font-size: 1.15rem;
+      font-size: 1.1rem;
     }
     .cta-group { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
     .btn {
@@ -70,10 +106,10 @@
     .btn-secondary { background: var(--card); color: var(--text); border: 1px solid var(--border); }
     .btn-secondary:hover { border-color: var(--accent); }
     section { padding: 48px 0; border-bottom: 1px solid var(--border); }
-    h2 { font-size: 1.8rem; margin-bottom: 24px; text-align: center; }
+    h2 { font-size: clamp(1.45rem, 3.5vw, 1.8rem); margin-bottom: 24px; text-align: center; }
     .grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
       gap: 20px;
     }
     .card {
@@ -84,15 +120,22 @@
     }
     .card h3 { color: var(--accent); margin-bottom: 10px; font-size: 1.15rem; }
     .card p { color: var(--muted); font-size: 0.95rem; }
+    .table-wrap {
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+    }
     table {
       width: 100%;
+      min-width: 560px;
       border-collapse: collapse;
       background: var(--card);
-      border-radius: 12px;
-      overflow: hidden;
       font-size: 0.95rem;
     }
     th, td { padding: 14px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+    tr:last-child td { border-bottom: none; }
     th { background: #182236; color: var(--accent); }
     td.good { color: var(--green); font-weight: 600; }
     .steps {
@@ -105,7 +148,16 @@
     }
     .steps ol { padding-left: 20px; }
     .steps li { margin-bottom: 14px; color: var(--muted); }
+    .steps li:last-child { margin-bottom: 0; }
     .steps strong { color: var(--text); }
+    code {
+      background: #0b0f19;
+      color: var(--accent);
+      border: 1px solid var(--border);
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-size: 0.9em;
+    }
     footer {
       text-align: center;
       padding: 40px 20px;
@@ -113,6 +165,7 @@
       font-size: 0.9rem;
     }
     footer a { color: var(--accent); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -124,7 +177,7 @@
         Enterprise Device Owner + Zero-Ping NextDNS + On-Device Aegis Vision Guard. Built for people tired of bypassing their own blockers at 2 AM—without breaking banking, UPI, or gaming.
       </p>
       <div class="cta-group">
-        <a href="https://github.com/Techie-irfu/LockSight/releases" class="btn btn-primary">Download Latest Release</a>
+        <a href="https://github.com/Techie-irfu/LockSight/releases/latest" class="btn btn-primary">Download Latest Release</a>
         <a href="https://github.com/Techie-irfu/LockSight" class="btn btn-secondary">View Source on GitHub</a>
       </div>
     </header>
@@ -149,71 +202,76 @@
           <p>One-tap Quick Settings tile pauses Accessibility for 3 minutes so strict banking and UPI apps (GPay, Paytm) work smoothly with auto-restore.</p>
         </div>
         <div class="card">
-          <h3>Daylight-Only ADB &amp; Vault Lock</h3>
-          <p>Seals USB/Wireless ADB and secondary Guest/Cloner profiles behind a 12h/24h Daylight-only (7 AM – 6 PM) countdown.</p>
+          <h3>Independent Anti-Soft-Lock Vaults</h3>
+          <p>Private DNS, VPN Lock, Multi-User/System Cloner Lock, and Daylight-Only ADB Lock (12h/24h, 7 AM – 6 PM) are all separate controls so you never lock yourself out.</p>
         </div>
         <div class="card">
           <h3>Zen Sanctuary &amp; Multi-Faith</h3>
-          <p>Full-screen urge lockout with box breathing, nature audio, and daily reflections in Islamic, Hindu, Christian, Universal, or Minimal modes.</p>
+          <p>Full-screen urge lockout with box breathing, built-in offline nature audio, focus games, and daily reflections in Islamic, Hindu, Christian, Universal, or Minimal modes.</p>
         </div>
       </div>
     </section>
 
     <section>
       <h2>How LockSight Compares</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Bypass / Pain Point</th>
-            <th>Typical Play Store Blockers</th>
-            <th>LockSight</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><strong>Turning off Private DNS</strong></td>
-            <td>Cannot lock Android DNS menu</td>
-            <td class="good">Permanently grayed out via Device Owner</td>
-          </tr>
-          <tr>
-            <td><strong>Uninstalling / Force Stopping</strong></td>
-            <td>Bypassed via Device Admin captcha</td>
-            <td class="good">Uninstall &amp; Force Stop disabled by OS</td>
-          </tr>
-          <tr>
-            <td><strong>Gaming Ping &amp; Battery</strong></td>
-            <td>24/7 local VPN adds ping &amp; heat</td>
-            <td class="good">Native Private DNS (0ms ping, 0% idle drain)</td>
-          </tr>
-          <tr>
-            <td><strong>Offline Videos &amp; Telegram</strong></td>
-            <td>DNS cannot inspect local files</td>
-            <td class="good">Offline Aegis Neural Vision Guard</td>
-          </tr>
-          <tr>
-            <td><strong>Strict UPI &amp; Banking Apps</strong></td>
-            <td>Blocks payments or forces uninstall</td>
-            <td class="good">3-Minute Auto-Restore Safe Pay Tile</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Bypass / Pain Point</th>
+              <th>Typical Play Store Blockers</th>
+              <th>LockSight</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Turning off Private DNS</strong></td>
+              <td>Cannot lock Android DNS menu</td>
+              <td class="good">Permanently grayed out via Device Owner</td>
+            </tr>
+            <tr>
+              <td><strong>Uninstalling / Force Stopping</strong></td>
+              <td>Bypassed via Device Admin captcha</td>
+              <td class="good">Uninstall &amp; Force Stop disabled by OS</td>
+            </tr>
+            <tr>
+              <td><strong>Gaming Ping &amp; Battery</strong></td>
+              <td>24/7 local VPN adds ping &amp; heat</td>
+              <td class="good">Native Private DNS (0ms ping, 0% idle drain)</td>
+            </tr>
+            <tr>
+              <td><strong>Offline Videos &amp; Telegram</strong></td>
+              <td>DNS cannot inspect local files</td>
+              <td class="good">Offline Aegis Neural Vision Guard</td>
+            </tr>
+            <tr>
+              <td><strong>Strict UPI &amp; Banking Apps</strong></td>
+              <td>Blocks payments or forces uninstall</td>
+              <td class="good">3-Minute Auto-Restore Safe Pay Tile</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <section>
-      <h2>2-Minute PC Setup Overview</h2>
+      <h2>2-Minute Android Setup (Via PC USB Helper)</h2>
       <div class="steps">
         <ol>
           <li><strong>Set Up NextDNS:</strong> Create a free NextDNS profile with Pornography &amp; SafeSearch enabled, plus a duplicate Ad-Bypass profile.</li>
-          <li><strong>Prepare Device:</strong> Temporarily remove Google/WhatsApp accounts and disable any cloned/dual apps for 60 seconds.</li>
-          <li><strong>Run One-Click Installer:</strong> Connect your phone via USB and run <code>Setup-LockSight.bat</code> from the latest GitHub Release ZIP.</li>
+          <li><strong>Prepare Android Phone:</strong> Temporarily remove Google/WhatsApp accounts and disable any cloned/dual apps for 60 seconds.</li>
+          <li><strong>Run One-Click USB Helper:</strong> Connect your Android phone to a Windows PC via USB and double-click <code>Setup-LockSight.bat</code> from the latest GitHub Release ZIP (or run the 4 manual ADB commands on Mac/Linux).</li>
           <li><strong>Seal &amp; Lock:</strong> Sign back into your accounts, enter your NextDNS IDs inside LockSight, and tap <em>Seal &amp; Lock NextDNS Permanently</em>.</li>
         </ol>
       </div>
     </section>
 
     <footer>
-      <p>Built by <strong>Mohammed Irfan (<a href="https://github.com/Techie-irfu">@Techie-irfu</a>)</strong> • Licensed under GNU AGPL-3.0</p>
-      <p style="margin-top: 8px;"><a href="https://github.com/Techie-irfu/LockSight/issues">Report an Issue</a> • <a href="https://ko-fi.com/techieirfu">Support on Ko-fi</a></p>
+      <p>Built by <strong>Mohammed Irfan (<a href="https://github.com/Techie-irfu" target="_blank" rel="noopener noreferrer">@Techie-irfu</a>)</strong> • Licensed under GNU AGPL-3.0</p>
+      <p style="margin-top: 8px;">
+        <a href="https://github.com/Techie-irfu/LockSight/issues" target="_blank" rel="noopener noreferrer">Report an Issue</a> •
+        <a href="https://ko-fi.com/techieirfu" target="_blank" rel="noopener noreferrer">Support on Ko-fi</a>
+      </p>
     </footer>
   </div>
 </body>
