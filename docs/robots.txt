@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://techie-irfu.github.io/LockSight/sitemap.xml
