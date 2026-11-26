@@ -135,6 +135,17 @@ adb shell dumpsys deviceidle whitelist +com.locksight.guard
 
 Once finished, you can turn **`Disable system optimization`** back **OFF** (the granted permission stays saved!), **unplug your phone, and sign back into all your accounts.**
 
+#### Option D: No-PC Setup Directly on Android (Using Termux + Wireless Debugging)
+No Windows/Mac/Linux PC? You can complete the full installation directly on your Android 11+ phone over Wi-Fi:
+1. Download **`LockSight-vX.X.X-No-PC-Setup-Termux.zip`** from [Releases](https://github.com/Techie-irfu/LockSight/releases/latest), and extract `setup-locksight-termux.sh` into your phone's main **`Download`** folder.
+2. Install **Termux** from Google Play Store, [GitHub Releases](https://github.com/termux/termux-app/releases) or F-Droid.
+3. Connect to Wi-Fi, complete Steps 2–3 above (remove accounts/Clone Apps & enable OEM Developer toggles), and turn ON **Wireless Debugging**.
+4. Open **Termux** and **Wireless Debugging** in **Split Screen**, and run this inside Termux:
+```bash
+cp /sdcard/Download/setup-locksight-termux.sh ~ && sed -i 's/\r$//' ~/setup-locksight-termux.sh && chmod +x ~/setup-locksight-termux.sh && ~/setup-locksight-termux.sh
+```
+5. **Important Security Step:** After signing back into your accounts and locking ADB inside LockSight, **uninstall Termux** so local wireless ADB cannot be used as a bypass later.
+
 ---
 
 ### Step 5: Seal DNS, Lock VPN & Lock ADB (Zero Loopholes)
