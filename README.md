@@ -177,7 +177,21 @@ Strict Indian UPI and banking apps monitor Accessibility Services for anti-fraud
   1. Pull down Quick Settings and tap the **Safe Pay** tile **before** opening your payment app (or tap *Enter Safe Payment Mode* inside LockSight).
   2. Complete your payment normally — **Browsers and Shopping apps (Amazon, Flipkart) stay 100% open on locked NextDNS** so website checkouts never fail.
   3. After **3 minutes**, LockSight automatically turns Accessibility back ON and restores suspended media apps hands-free! *(If you installed without `WRITE_SECURE_SETTINGS`, simply tap the 3-minute notification to flip LockSight back ON.)*
-  - *Tip for GPay:* If you accidentally open GPay *before* tapping Safe Pay and see the "Restart your phone" screen, tap **Safe Pay**, wait a few seconds inside GPay, and it will refresh back to the normal payment screen without needing a restart.
+
+### Google Pay (GPay) Quick Fix
+Always tap the **Safe Pay** Quick Settings tile (or enable it inside LockSight) **before** opening GPay.
+
+- **If you opened GPay by mistake before turning on Safe Pay** and see the *"Turn off Accessibility / Uninstall / Restart your phone"* screen (usually happens only once after first install):
+  1. Turn **ON** Safe Pay (via Quick Settings or inside LockSight).
+  2. **Restart your phone** immediately.
+  3. After rebooting, wait **3 minutes** for the Safe Pay timer to finish and auto-restore.
+  4. Turn **ON** Safe Pay again, open GPay, and complete your payment normally.
+  *(After this one-time reset, if you ever open GPay without Safe Pay again, just pull down Quick Settings, tap **Safe Pay**, and switch back to GPay.)*
+
+- **If the warning screen still refuses to clear:**
+  1. Make sure **Safe Pay is ON**.
+  2. Open GPay's **App Info -> Force Stop -> Storage -> Clear Cache** *(Clear Cache only — do **not** tap Clear Data)*.
+  3. Reopen GPay (if the prompt still flashes, tap the **Accessibility** link on it and wait a few seconds), then complete your payment.
 
 ---
 
