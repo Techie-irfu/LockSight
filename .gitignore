@@ -8,3 +8,4 @@ local.properties
 .externalNativeBuild
 .cxx
 locksight_errors.txt
+app/release/
